@@ -1,0 +1,17 @@
+(defpoll battery-percent :interval "10s" "scripts/battery-capacity")
+(defpoll battery-status  :interval "10s" "scripts/battery-status")
+
+(defwidget battery-popup []
+  (box :class "battery-popup"
+       :halign "center"
+       :valign "center"
+    (label :class "battery-popup-text"
+           :text "${battery-percent}% ${battery-status}")))
+
+(defwindow battery-popup
+  :monitor 0
+  :geometry (geometry :anchor "center")
+  :stacking "overlay"
+  :exclusive false
+  :focusable false
+  (battery-popup))

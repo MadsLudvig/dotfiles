@@ -1,0 +1,8 @@
+#!/bin/sh
+# Print the charge % of the first real battery. Portable across machines
+# (macsmc-battery on Asahi, BAT0/BAT1 on x86).
+for d in /sys/class/power_supply/*; do
+  [ "$(cat "$d/type" 2>/dev/null)" = "Battery" ] || continue
+  cat "$d/capacity" 2>/dev/null && exit 0
+done
+echo "?"

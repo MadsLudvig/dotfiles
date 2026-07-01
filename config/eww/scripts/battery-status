@@ -1,0 +1,7 @@
+#!/bin/sh
+# Print the charging status of the first real battery. Portable across machines.
+for d in /sys/class/power_supply/*; do
+  [ "$(cat "$d/type" 2>/dev/null)" = "Battery" ] || continue
+  cat "$d/status" 2>/dev/null && exit 0
+done
+echo "Unknown"
