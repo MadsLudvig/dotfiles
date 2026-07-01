@@ -33,11 +33,25 @@
         imports = [ zen-browser.homeModules.beta ];
         home.stateVersion = "25.11";
 
+        programs.eww = {
+          enable = true;
+          package = pkgs.eww;
+        };
+
         # Raw configs that stay files (no good native module).
         xdg.configFile = {
           "hypr".source   = ./config/hypr;
           "eww".source    = ./config/eww;
           "fuzzel".source = ./config/fuzzel;
+        };
+
+        home.pointerCursor = {
+          package = pkgs.bibata-cursors;
+          name = "Bibata-Modern-Ice";
+          size = 24;
+          gtk.enable = true;
+          x11.enable = true;
+          hyprcursor.enable = true;
         };
 
         # Dark GTK apps (gimp, file dialogs).
@@ -79,14 +93,29 @@
               "browser.newtabpage.enabled" = false;
               "privacy.donottrackheader.enabled" = true;
               "signon.rememberSignons" = false;
+
+              # Dark mode
+              "browser.theme.toolbar-theme" = 0;
+              "browser.theme.content-theme" = 0;
+              "layout.css.prefers-color-scheme.content-override" = 0;
+              "ui.systemUsesDarkTheme" = 1;
             };
-            extensions.packages = with firefox-addons.packages.${pkgs.stdenv.hostPlatform.system}; [
+            # Re-instantiate pkgs with the firefox-addons overlay + allowUnfree so
+            # the (unfree) 1Password addon evaluates under *our* config.
+            extensions.packages = let
+              addonsPkgs = import pkgs.path {
+                inherit (pkgs.stdenv.hostPlatform) system;
+                config.allowUnfree = true;
+                overlays = [ firefox-addons.overlays.default ];
+              };
+            in with addonsPkgs.firefox-addons; [
               tridactyl
               ublock-origin
+              onepassword-password-manager
             ];
           };
         };
-
+            
         # zsh + starship, no framework.
         programs.zsh = {
           enable = true;
@@ -96,7 +125,7 @@
         };
         programs.starship.enable = true;
 
-        home.packages = with pkgs; [ ripgrep fd tridactyl-native ];
+        home.packages = with pkgs; [ ripgrep fd tridactyl-native lazygit rustc cargo clippy rustfmt rust-analyzer claude-code];
       };
 
       # ───────────────────── shared system (both hosts) ─────────────────────
@@ -105,6 +134,20 @@
 
         networking.networkmanager.enable = true;
         networking.networkmanager.wifi.backend = "iwd";
+
+        programs._1password.enable = true;
+        programs._1password-gui = {
+          enable = true;
+          polkitPolicyOwners = [ "mads" ];
+        };
+        # Zen (a Firefox fork) runs as "zen-beta"; 1Password only trusts an
+        # allowlist of browser process names, so add it or the extension can't
+        # unlock via the desktop app. Manifest already lives in ~/.mozilla.
+        environment.etc."1password/custom_allowed_browsers".text = ''
+          zen-beta
+        '';
+
+        services.tailscale.enable = true;
 
         time.timeZone = "Europe/Copenhagen"; # set yours
         i18n.defaultLocale = "en_US.UTF-8";
@@ -116,6 +159,7 @@
           enable = true;
           extraPortals = [ pkgs.xdg-desktop-portal-hyprland ];
         };
+
 
         # greetd autologins mads straight into Hyprland (via uwsm).
         services.greetd = {
@@ -152,8 +196,15 @@
 
       mkHost = { system, modules }: nixpkgs.lib.nixosSystem {
         inherit system;
-        modules = [ home-manager.nixosModules.home-manager common ] ++ modules;
+        modules = [ 
+          home-manager.nixosModules.home-manager 
+          common 
+          ({ pkgs, ... }: {
+            nixpkgs.config.allowUnfree = true;
+          })
+        ] ++ modules;
       };
+
     in
     {
       nixosConfigurations = {
