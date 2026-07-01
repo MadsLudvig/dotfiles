@@ -170,6 +170,7 @@
               hardware.asahi.peripheralFirmwareDirectory = ./firmware;
 
               boot.loader.systemd-boot.enable = true;
+              boot.loader.systemd-boot.configurationLimit = 3; # 500M ESP is small
               boot.extraModprobeConfig = "options hid_apple fnmode=1";
               boot.blacklistedKernelModules = [ "pcspkr" ];
 
