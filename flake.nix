@@ -29,7 +29,7 @@
   outputs = { self, nixpkgs, apple-silicon, home-manager, firefox-addons, zen-browser, ... }:
     let
       # ───────────────────── shared home-manager user ─────────────────────
-      home = { pkgs, ... }: {
+      home = { pkgs, osConfig, ... }: {
         imports = [ zen-browser.homeModules.beta ];
         home.stateVersion = "25.11";
 
@@ -39,8 +39,23 @@
         };
 
         # Raw configs that stay files (no good native module).
+        # `hypr` is recursive so we can drop a host-specific monitors.conf in
+        # alongside the shared files (hyprland.conf `source`s it).
         xdg.configFile = {
-          "hypr".source   = ./config/hypr;
+          "hypr" = { source = ./config/hypr; recursive = true; };
+          "hypr/monitors.conf".text =
+            if osConfig.networking.hostName == "mbp"
+            then ''
+              monitor = , preferred, auto, 2.0
+            ''
+            else ''
+              monitor = desc:Lenovo Group Limited P27q-20 V909LRFR, 2560x1440@60, 0x0, 1.25
+              monitor = desc:Lenovo Group Limited P27q-20 V909LPNY, 2560x1440@60, 2048x0, 1.25
+              monitor = desc:Lenovo Group Limited P27q-20 V909LRDD, 2560x1440@60, 4096x0, 1.25
+              workspace = 1, monitor:desc:Lenovo Group Limited P27q-20 V909LRFR, default:true
+              workspace = 2, monitor:desc:Lenovo Group Limited P27q-20 V909LPNY, default:true
+              workspace = 3, monitor:desc:Lenovo Group Limited P27q-20 V909LRDD, default:true
+            '';
           "eww".source    = ./config/eww;
           "fuzzel".source = ./config/fuzzel;
         };
@@ -155,7 +170,7 @@
           };
         };
 
-        home.packages = with pkgs; [ ripgrep fd tridactyl-native lazygit rustc cargo clippy rustfmt rust-analyzer claude-code];
+        home.packages = with pkgs; [ ripgrep fd tridactyl-native lazygit rustc cargo clippy rustfmt rust-analyzer claude-code gcc bluetui impala];
       };
 
       # ───────────────────── shared system (both hosts) ─────────────────────
@@ -224,6 +239,8 @@
 
         home-manager.useGlobalPkgs = true;
         home-manager.useUserPackages = true;
+        # Back up (don't clobber) any pre-existing files HM wants to manage.
+        home-manager.backupFileExtension = "hm-bak";
         home-manager.users.mads = home;
       };
 
@@ -274,10 +291,20 @@
           system = "x86_64-linux";
           modules = [
             ./hosts/pc/hardware-configuration.nix # generated on the PC
-            ({ ... }: {
+            ({ config, ... }: {
               networking.hostName = "pc";
               boot.loader.systemd-boot.enable = true;
               boot.loader.efi.canTouchEfiVariables = true; # normal x86 UEFI
+
+              # NVIDIA (RTX 20-series or newer → open kernel module).
+              services.xserver.videoDrivers = [ "nvidia" ];
+              hardware.graphics.enable = true; # OpenGL/Vulkan userspace (was hardware.opengl)
+              hardware.nvidia = {
+                modesetting.enable = true;      # required for Wayland/Hyprland
+                open = true;                    # open kernel module (Turing+)
+                nvidiaSettings = true;
+                package = config.boot.kernelPackages.nvidiaPackages.stable;
+              };
             })
           ];
         };
