@@ -60,6 +60,10 @@
           theme = { name = "Adwaita-dark"; package = pkgs.gnome-themes-extra; };
           gtk3.extraConfig.gtk-application-prefer-dark-theme = 1;
           gtk4.extraConfig.gtk-application-prefer-dark-theme = 1;
+          # Adopt the new default: don't force a theme on GTK4/libadwaita apps
+          # (dark still applies via prefer-dark-theme above). Silences the
+          # stateVersion < 26.05 legacy-default warning.
+          gtk4.theme = null;
         };
 
         # Neovim: init.lua verbatim; plugins + LSP pinned by Nix.
@@ -125,6 +129,32 @@
         };
         programs.starship.enable = true;
 
+        # SSH auth via the 1Password agent — private keys stay in the vault,
+        # never on disk or in the Nix store.
+        programs.ssh = {
+          enable = true;
+          enableDefaultConfig = false;
+          settings."*".IdentityAgent = "~/.1password/agent.sock";
+        };
+
+        # git identity + SSH commit signing through 1Password's op-ssh-sign.
+        programs.git = {
+          enable = true;
+          settings = {
+            user.name  = "Mads Fagerlund";
+            user.email = "mads@deepvis.ai";
+            user.signingkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAPlpVGZLhfrJqh2j5q3reyGOPQQ9BgW8syQ28tYjlg2";
+            gpg.format = "ssh";
+            # NixOS store path — NOT 1Password's suggested /opt/1Password/... which doesn't exist here.
+            "gpg \"ssh\"".program =
+              "${pkgs._1password-gui}/share/1password/op-ssh-sign";
+            commit.gpgsign = true;
+            # Transparently use SSH (1Password agent) for the deepvis server,
+            # so existing HTTPS remotes need no manual `git remote set-url`.
+            url."git@git.deepvis.ai:".insteadOf = "https://git.deepvis.ai/";
+          };
+        };
+
         home.packages = with pkgs; [ ripgrep fd tridactyl-native lazygit rustc cargo clippy rustfmt rust-analyzer claude-code];
       };
 
@@ -148,6 +178,9 @@
         '';
 
         services.tailscale.enable = true;
+        # Tailscale SSH: keyless, portless SSH gated by tailnet ACLs.
+        # Needs a matching "ssh" rule in the admin console to actually permit access.
+        services.tailscale.extraUpFlags = [ "--ssh" ];
 
         time.timeZone = "Europe/Copenhagen"; # set yours
         i18n.defaultLocale = "en_US.UTF-8";
