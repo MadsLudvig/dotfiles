@@ -49,9 +49,9 @@
               monitor = , preferred, auto, 2.0
             ''
             else ''
-              monitor = desc:Lenovo Group Limited P27q-20 V909LRFR, 2560x1440@60, 0x0, 1.25
-              monitor = desc:Lenovo Group Limited P27q-20 V909LPNY, 2560x1440@60, 2048x0, 1.25
-              monitor = desc:Lenovo Group Limited P27q-20 V909LRDD, 2560x1440@60, 4096x0, 1.25
+              monitor = desc:Lenovo Group Limited P27q-20 V909LRFR, 2560x1440@60, 0x0, 1.07
+              monitor = desc:Lenovo Group Limited P27q-20 V909LPNY, 2560x1440@60, 2400x0, 1.07
+              monitor = desc:Lenovo Group Limited P27q-20 V909LRDD, 2560x1440@60, 4800x0, 1.07
               workspace = 1, monitor:desc:Lenovo Group Limited P27q-20 V909LRFR, default:true
               workspace = 2, monitor:desc:Lenovo Group Limited P27q-20 V909LPNY, default:true
               workspace = 3, monitor:desc:Lenovo Group Limited P27q-20 V909LRDD, default:true
@@ -178,7 +178,7 @@
         nix.settings.experimental-features = [ "nix-command" "flakes" ];
 
         networking.networkmanager.enable = true;
-        networking.networkmanager.wifi.backend = "iwd";
+        networking.networkmanager.wifi.backend = "wpa_supplicant";
 
         programs._1password.enable = true;
         programs._1password-gui = {
