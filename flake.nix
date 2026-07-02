@@ -49,15 +49,50 @@
               monitor = , preferred, auto, 2.0
             ''
             else ''
-              monitor = desc:Lenovo Group Limited P27q-20 V909LRFR, 2560x1440@60, 0x0, 1.07
-              monitor = desc:Lenovo Group Limited P27q-20 V909LPNY, 2560x1440@60, 2400x0, 1.07
-              monitor = desc:Lenovo Group Limited P27q-20 V909LRDD, 2560x1440@60, 4800x0, 1.07
+              monitor = desc:Lenovo Group Limited P27q-20 V909LRFR, 2560x1440@60, 0x0, 1.0
+              monitor = desc:Lenovo Group Limited P27q-20 V909LPNY, 2560x1440@60, 2560x0, 1.0
+              monitor = desc:Lenovo Group Limited P27q-20 V909LRDD, 2560x1440@60, 5120x0, 1.0
               workspace = 1, monitor:desc:Lenovo Group Limited P27q-20 V909LRFR, default:true
               workspace = 2, monitor:desc:Lenovo Group Limited P27q-20 V909LPNY, default:true
               workspace = 3, monitor:desc:Lenovo Group Limited P27q-20 V909LRDD, default:true
             '';
           "eww".source    = ./config/eww;
           "fuzzel".source = ./config/fuzzel;
+        };
+
+        programs.kitty = {
+          enable = true;
+          settings = {
+            font_size = "11.5";
+
+            # cyberdream theme
+            background            = "#16181a";
+            foreground            = "#ffffff";
+            cursor                = "#ffffff";
+            cursor_text_color     = "#16181a";
+            selection_background  = "#3c4048";
+            selection_foreground  = "#ffffff";
+            color0                = "#16181a";
+            color8                = "#3c4048";
+            color1                = "#ff6e5e";
+            color9                = "#ff6e5e";
+            color2                = "#5eff6c";
+            color10               = "#5eff6c";
+            color3                = "#f1ff5e";
+            color11               = "#f1ff5e";
+            color4                = "#5ea1ff";
+            color12               = "#5ea1ff";
+            color5                = "#bd5eff";
+            color13               = "#bd5eff";
+            color6                = "#5ef1ff";
+            color14               = "#5ef1ff";
+            color7                = "#ffffff";
+            color15               = "#ffffff";
+            active_tab_foreground   = "#000000";
+            active_tab_background   = "#ffbd5e";
+            inactive_tab_foreground = "#ffffff";
+            inactive_tab_background = "#16181a";
+          };
         };
 
         home.pointerCursor = {
