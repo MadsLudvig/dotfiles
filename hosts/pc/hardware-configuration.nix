@@ -16,11 +16,11 @@
   hardware.enableRedistributableFirmware = true; # wifi/gpu firmware for arbitrary hw
 
   fileSystems."/" = {
-    device = "/dev/disk/by-label/nixos";
+    device = "/dev/disk/by-label/NIXROOT";
     fsType = "ext4";
   };
   fileSystems."/boot" = {
-    device = "/dev/disk/by-label/BOOT";
+    device = "/dev/disk/by-label/NIXBOOT";
     fsType = "vfat";
   };
 
