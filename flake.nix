@@ -96,6 +96,7 @@
         };
 
         home.pointerCursor = {
+          enable = true;
           package = pkgs.bibata-cursors;
           name = "Bibata-Modern-Ice";
           size = 24;
@@ -179,6 +180,8 @@
         };
         programs.starship.enable = true;
 
+      
+
         # SSH auth via the 1Password agent — private keys stay in the vault,
         # never on disk or in the Nix store.
         programs.ssh = {
@@ -211,9 +214,42 @@
       # ───────────────────── shared system (both hosts) ─────────────────────
       common = { pkgs, ... }: {
         nix.settings.experimental-features = [ "nix-command" "flakes" ];
+        # Trusted so client-side nix config takes effect — the deepvis repo's
+        # flake nixConfig advertises the team dev cache (attic on the builder,
+        # over the tailnet), and the daemon ignores it for untrusted users.
+        nix.settings.trusted-users = [ "mads" ];
+        # x86_64 derivations build on the build host instead of under local
+        # qemu emulation — anything the dev cache doesn't already have ships
+        # there as a remote build (tailnet; the builder's `builder` user
+        # exists for exactly this).
+        #
+        # The host key is pinned system-wide because the ssh'ing party is the
+        # root daemon, which has no known_hosts and never gets a tty to
+        # answer a trust prompt.
+        programs.ssh.knownHosts."builder" = {
+          extraHostNames = [ "5.9.71.104" "builder.tailf5eaab.ts.net" ];
+          publicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHnKIrxYtlovvYGgkpEZXY8wG/CuSLMGOM/84eIlyeVW";
+        };
+        nix.distributedBuilds = true;
+        nix.buildMachines = [{
+          hostName = "builder";
+          sshUser = "builder";
+          # The daemon (root) does the ssh'ing, so it needs an explicit
+          # on-disk key — it has no access to a user's agent.
+          sshKey = "/home/mads/.ssh/id_ed25519";
+          protocol = "ssh-ng";
+          system = "x86_64-linux";
+          maxJobs = 16;
+          supportedFeatures = [ "big-parallel" "kvm" "nixos-test" ];
+        }];
 
         networking.networkmanager.enable = true;
-        networking.networkmanager.wifi.backend = "wpa_supplicant";
+        networking.networkmanager.wifi.backend = "iwd";
+
+        # Secret Service (org.freedesktop.secrets) provider, D-Bus-activated on
+        # demand. Without it 1Password can't persist the 2FA device token
+        # ("unable to save your two-factor token") and re-prompts every unlock.
+        services.gnome.gnome-keyring.enable = true;
 
         programs._1password.enable = true;
         programs._1password-gui = {
@@ -304,17 +340,33 @@
 
               # Wi-Fi/BT firmware, vendored (a pure flake can't read /boot/asahi).
               hardware.asahi.peripheralFirmwareDirectory = ./firmware;
+              hardware.asahi.enable = true;
 
               boot.loader.systemd-boot.enable = true;
               boot.loader.systemd-boot.configurationLimit = 3; # 500M ESP is small
               boot.extraModprobeConfig = "options hid_apple fnmode=1";
               boot.blacklistedKernelModules = [ "pcspkr" ];
 
-              # Asahi kernel + Mesa cache (else compile from source).
+              # Build x86_64 derivations (packing-station iso/deploys) via qemu.
+              boot.binfmt.emulatedSystems = [ "x86_64-linux" ];
+
+              # Resolve .local names, so the packing stations can be reached and
+              # deployed to by hostname instead of by address.
+              services.avahi = {
+                enable = true;
+                nssmdns4 = true;
+              };
+
+              # Asahi kernel + Mesa cache, and the Raspberry Pi vendor
+              # kernel/firmware cache (else both compile from source).
               nix.settings = {
-                extra-substituters = [ "https://nixos-apple-silicon.cachix.org" ];
+                extra-substituters = [
+                  "https://nixos-apple-silicon.cachix.org"
+                  "https://nixos-raspberrypi.cachix.org"
+                ];
                 extra-trusted-public-keys = [
                   "nixos-apple-silicon.cachix.org-1:8psDu5SA5dAD7qA0zMy5UT292TxeEPzIz8VVEr2Js20="
+                  "nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI="
                 ];
               };
             })

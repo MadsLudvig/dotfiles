@@ -1,15 +1,18 @@
 # Asahi peripheral firmware (vendored)
 
 `hardware.asahi.peripheralFirmwareDirectory` points here. A **pure** flake
-cannot read `/boot/asahi`, so the Wi-Fi/Bluetooth firmware must live inside the
-repo tree and be git-tracked.
+cannot read `/boot/vendorfw`, so the Wi-Fi/Bluetooth firmware must live inside
+the repo tree and be git-tracked.
+
+Since nixos-apple-silicon 66d8dd2 the module expects the pre-extracted
+`firmware.cpio` (placed on the ESP by the Asahi installer) instead of
+`all_firmware.tar.gz` + `kernelcache.*`.
 
 ## During install, on the Mac:
 
 ```sh
-cp /boot/asahi/all_firmware.tar.gz  ~/.dotfiles/firmware/
-cp /boot/asahi/kernelcache*         ~/.dotfiles/firmware/
-git -C ~/.dotfiles add -f firmware/all_firmware.tar.gz firmware/kernelcache*
+cp /boot/vendorfw/firmware.cpio ~/.dotfiles/firmware/
+git -C ~/.dotfiles add -f firmware/firmware.cpio
 ```
 
 (They're `.gitignore`-exempt via `-f` if needed — but the flake only sees
