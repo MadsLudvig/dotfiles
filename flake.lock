@@ -78,6 +78,43 @@
         "type": "github"
       }
     },
+    "hyprland-virtual-desktops": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1790338297,
+        "narHash": "sha256-iJP+CyrS/fw/dqysRN9GtVB8GlJZcja4rkjBeJsXFsg=",
+        "owner": "levnikmyskin",
+        "repo": "hyprland-virtual-desktops",
+        "rev": "74b88ee5209c4dcea74eedc4646e185b02a8f946",
+        "type": "github"
+      },
+      "original": {
+        "owner": "levnikmyskin",
+        "repo": "hyprland-virtual-desktops",
+        "type": "github"
+      }
+    },
+    "linear-tui-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1790503843,
+        "narHash": "sha256-FS0w8a53N+XN0tnxUzpu4FNG0rYVycv/ZlnB7bPgd+I=",
+        "owner": "k1-c",
+        "repo": "linear-tui",
+        "rev": "fa79ffed365c2deff1916022abe8652989682216",
+        "type": "github"
+      },
+      "original": {
+        "owner": "k1-c",
+        "ref": "v0.13.0",
+        "repo": "linear-tui",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1786106723,
@@ -99,6 +136,8 @@
         "apple-silicon": "apple-silicon",
         "firefox-addons": "firefox-addons",
         "home-manager": "home-manager",
+        "hyprland-virtual-desktops": "hyprland-virtual-desktops",
+        "linear-tui-src": "linear-tui-src",
         "nixpkgs": "nixpkgs",
         "zen-browser": "zen-browser"
       }

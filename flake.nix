@@ -24,10 +24,46 @@
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.home-manager.follows = "home-manager";
     };
+
+    # linear-tui has no flake of its own, so take the source and build it below.
+    # Pinned to a tag; `nix flake update` moves it and records the hash in
+    # flake.lock, so there is no sha256 to maintain by hand.
+    linear-tui-src = {
+      url = "github:k1-c/linear-tui/v0.13.0";
+      flake = false;
+    };
+
+    # Virtual desktops: one desktop spans all monitors, replacing Hyprland's
+    # workspace-pinned-to-monitor model. Its own nixpkgs pin is older than
+    # ours, and Hyprland plugins are ABI-locked to the compositor, so it must
+    # follow ours to compile against the hyprland we actually run.
+    hyprland-virtual-desktops = {
+      url = "github:levnikmyskin/hyprland-virtual-desktops";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, apple-silicon, home-manager, firefox-addons, zen-browser, ... }:
+  outputs = { self, nixpkgs, apple-silicon, home-manager, firefox-addons, zen-browser, linear-tui-src, hyprland-virtual-desktops, ... }:
     let
+      # linear-tui, built from the pinned source input above. Upstream ships no
+      # flake and it is not in nixpkgs, but it has a committed Cargo.lock, so
+      # cargoLock.lockFile covers the dependency hashes with nothing to vendor.
+      #
+      # No OpenSSL/pkg-config needed: the crate selects reqwest's rustls
+      # backend on purpose, and takes its trust roots from the OS store.
+      linearTui = pkgs: pkgs.rustPlatform.buildRustPackage {
+        pname = "linear-tui";
+        version = "0.13.0";
+        src = linear-tui-src;
+        cargoLock.lockFile = "${linear-tui-src}/Cargo.lock";
+        # One test (a_worktree_belongs_to_its_repository) shells out to `git`,
+        # which the build sandbox lacks -- it panics on NotFound unwrapping
+        # Command::new("git"). Supplying git lets all 512 tests run.
+        nativeCheckInputs = [ pkgs.git ];
+
+        meta.mainProgram = "linear-tui";
+      };
+
       # ───────────────────── shared home-manager user ─────────────────────
       home = { pkgs, osConfig, ... }: {
         imports = [ zen-browser.homeModules.beta ];
@@ -47,17 +83,74 @@
             if osConfig.networking.hostName == "mbp"
             then ''
               monitor = , preferred, auto, 2.0
+
+              # Floating TUI panels: 70% wide, full height. Absolute px because
+              # Hyprland 0.56 ignores percentages in `size`. 1728x1080 logical.
+              windowrule = match:class ^(panel-wifi|panel-bt)$, float on, size 1210 1080, center on
             ''
             else ''
               monitor = desc:Lenovo Group Limited P27q-20 V909LRFR, 2560x1440@60, 0x0, 1.0
               monitor = desc:Lenovo Group Limited P27q-20 V909LPNY, 2560x1440@60, 2560x0, 1.0
               monitor = desc:Lenovo Group Limited P27q-20 V909LRDD, 2560x1440@60, 5120x0, 1.0
-              workspace = 1, monitor:desc:Lenovo Group Limited P27q-20 V909LRFR, default:true
-              workspace = 2, monitor:desc:Lenovo Group Limited P27q-20 V909LPNY, default:true
-              workspace = 3, monitor:desc:Lenovo Group Limited P27q-20 V909LRDD, default:true
+
+              # Same panels, sized for 2560x1440 logical.
+              windowrule = match:class ^(panel-wifi|panel-bt)$, float on, size 1792 1440, center on
             '';
+          # Plugin load line, as a store path. Sourced from hyprland.conf, the
+          # same pattern as monitors.conf. Upstream installs the library as
+          # libvirtual-desktops.so (not lib<pname>.so).
+          "hypr/plugins.conf".text = ''
+            plugin = ${hyprland-virtual-desktops.packages.${pkgs.stdenv.hostPlatform.system}.virtual-desktops}/lib/libvirtual-desktops.so
+          '';
           "eww".source    = ./config/eww;
           "fuzzel".source = ./config/fuzzel;
+        };
+
+
+        # Launcher hygiene. These .desktop entries ship with packages we do want,
+        # but they are noise in fuzzel. A NoDisplay entry in XDG_DATA_HOME
+        # shadows the package's own copy, which is the only way to hide one
+        # without patching the package.
+        #
+        # Deliberately home.file and NOT xdg.desktopEntries: that option only
+        # emits anything when xdg.enable = true, which we don't set, so it
+        # silently produces no files at all.
+        #   nvim  - neovim's "Neovim wrapper" entry; we only launch it from a terminal
+        #   uuctl - uwsm's systemd-user-unit picker, pulled in by withUWSM
+        home.file = {
+          ".local/share/applications/nvim.desktop".text = ''
+            [Desktop Entry]
+            Type=Application
+            Name=Neovim wrapper
+            NoDisplay=true
+          '';
+          ".local/share/applications/uuctl.desktop".text = ''
+            [Desktop Entry]
+            Type=Application
+            Name=uuctl
+            NoDisplay=true
+          '';
+        };
+
+        # Notification daemon. Nothing owned org.freedesktop.Notifications before
+        # this, so notify-send failed outright: hyprshot's "Screenshot saved"
+        # toasts went nowhere, and kitty logged a DBus ServiceUnknown error on
+        # every launch. Colours match the cyberdream kitty theme above.
+        services.mako = {
+          enable = true;
+          settings = {
+            font = "JetBrainsMono Nerd Font 11";
+            background-color = "#16181a";
+            text-color = "#ffffff";
+            border-color = "#5ea1ff";
+            border-size = 2;
+            border-radius = 8;
+            default-timeout = 5000;
+            anchor = "top-right";
+            margin = "12";
+            padding = "12";
+            width = 380;
+          };
         };
 
         programs.kitty = {
@@ -105,7 +198,7 @@
           hyprcursor.enable = true;
         };
 
-        # Dark GTK apps (gimp, file dialogs).
+        # Dark GTK apps (file dialogs, etc).
         gtk = {
           enable = true;
           theme = { name = "Adwaita-dark"; package = pkgs.gnome-themes-extra; };
@@ -208,7 +301,7 @@
           };
         };
 
-        home.packages = with pkgs; [ ripgrep fd tridactyl-native lazygit rustc cargo clippy rustfmt rust-analyzer claude-code gcc bluetui impala postgresql ];
+        home.packages = with pkgs; [ ripgrep fd tridactyl-native lazygit rustc cargo clippy rustfmt rust-analyzer claude-code gcc bluetui impala postgresql fastfetch (linearTui pkgs) ];
       };
 
       # ───────────────────── shared system (both hosts) ─────────────────────
@@ -316,6 +409,25 @@
 
         programs.hyprland = { enable = true; withUWSM = true; };
         programs.hyprlock.enable = true;
+
+        # Every GUI app lives in the one wayland-wm@hyprland.service cgroup, so
+        # with systemd's default OOMPolicy=stop a kernel OOM-kill of ANY process
+        # in it stops the whole unit -- compositor included. 1Password was always
+        # the victim (highest oom_score_adj), but losing it killed the entire
+        # desktop, and uwsm sets Restart=no, so nothing came back. It read as
+        # "Hyprland crashed" when the compositor was never at fault.
+        #
+        # continue: log the kill, lose that one app, keep the session. Merges
+        # into the drop-in the uwsm module already generates for this unit.
+        systemd.user.services."wayland-wm@".serviceConfig.OOMPolicy = "continue";
+
+        # Autologin means no password reaches PAM at login, so the gnome-keyring
+        # login keyring is never created or unlocked -- which is why 1Password
+        # could not persist its 2FA device token and re-prompted the YubiKey
+        # every unlock. Putting pam_gnome_keyring in hyprlock's stack instead
+        # makes the lock screen we already have do that job, so there is still
+        # exactly one password prompt and no second login screen.
+        security.pam.services.hyprlock.enableGnomeKeyring = true;
         services.hypridle.enable = true;
 
         # ── Amphetamine-style "stay awake" ──
@@ -354,11 +466,15 @@
 
         hardware.bluetooth.enable = true;
         programs.zsh.enable = true;
+        # No NixOS manual: it puts a "NixOS Manual" entry in the launcher and we
+        # read the docs on the web. man pages are unaffected.
+        documentation.nixos.enable = false;
+
         fonts.packages = [ pkgs.nerd-fonts.jetbrains-mono ];
 
         environment.systemPackages = with pkgs; [
-          git kitty fuzzel gimp
-          wl-clipboard grim slurp swaybg brightnessctl playerctl grimblast
+          git kitty fuzzel
+          wl-clipboard grim slurp swaybg brightnessctl playerctl hyprshot
           hyprpolkitagent xdg-utils
 
           # Front-end for caffeine.service (above). Bound to SUPER+A.
@@ -453,6 +569,28 @@
                 enable = true;
                 interval = "monthly";
                 fileSystems = [ "/" ];
+              };
+
+              # 15G of RAM and no swap at all: a `nixos-rebuild` forks ~60 nix
+              # evaluators, and stacked on a browser and a few editor sessions
+              # that was enough to exhaust it. The kernel then OOM-killed a
+              # process inside wayland-wm@hyprland.service, and systemd's default
+              # OOMPolicy=stop tore the whole graphical session down with it.
+              #
+              # zram rather than a swapfile, because root is compress=zstd and a
+              # btrfs swapfile needs its own nodatacow, uncompressed subvolume.
+              zramSwap = {
+                enable = true;
+                memoryPercent = 50; # 7.6G of backing store, ~a third of that in real RAM
+              };
+
+              # Swapping to RAM is cheap, so let the kernel compress anon pages
+              # rather than evict page cache. At the OOM above, cache had already
+              # been squeezed to 40M while 13G sat in anon and nothing was
+              # reclaimable — the default swappiness of 60 gets that backwards here.
+              boot.kernel.sysctl = {
+                "vm.swappiness" = 180;
+                "vm.page-cluster" = 0; # zram has no seek penalty, so no readahead
               };
 
               # Build x86_64 derivations (packing-station iso/deploys) via qemu.
