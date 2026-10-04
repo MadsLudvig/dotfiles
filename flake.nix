@@ -208,40 +208,83 @@
           };
         };
 
-        home.packages = with pkgs; [ ripgrep fd tridactyl-native lazygit rustc cargo clippy rustfmt rust-analyzer claude-code gcc bluetui impala];
+        home.packages = with pkgs; [ ripgrep fd tridactyl-native lazygit rustc cargo clippy rustfmt rust-analyzer claude-code gcc bluetui impala postgresql ];
       };
 
       # ───────────────────── shared system (both hosts) ─────────────────────
       common = { pkgs, ... }: {
         nix.settings.experimental-features = [ "nix-command" "flakes" ];
-        # Trusted so client-side nix config takes effect — the deepvis repo's
-        # flake nixConfig advertises the team dev cache (attic on the builder,
-        # over the tailnet), and the daemon ignores it for untrusted users.
+        # Trusted so client-side nix config takes effect — substituters and
+        # remote builders are trusted settings, silently ignored for anyone
+        # else. A cache that appears to do nothing is the usual symptom.
         nix.settings.trusted-users = [ "mads" ];
-        # x86_64 derivations build on the build host instead of under local
-        # qemu emulation — anything the dev cache doesn't already have ships
-        # there as a remote build (tailnet; the builder's `builder` user
-        # exists for exactly this).
+
+        # The deepvis binary cache: the embedded flakes in models/ort-nix
+        # (onnxruntime built from source, a CUDA training env) are hours of
+        # work to build and seconds to substitute.
+        nix.settings.extra-substituters = [ "https://deepvis.cachix.org" ];
+        nix.settings.extra-trusted-public-keys = [
+          "deepvis.cachix.org-1:UE/H6ERLwqhSqubzh8+pzl9eTm0kpMExGe0ym6fENp8="
+        ];
+        # Private cache, so reads need a token. nix refuses `netrc-file` on
+        # the command line under the daemon, and a token in the substituter
+        # URL would land in the process table — a root-owned 0600 netrc is
+        # the only form the calling process cannot read.
+        nix.settings.netrc-file = "/etc/nix/netrc";
+
+        # x86_64 derivations build off this machine rather than under local
+        # qemu emulation, and aarch64 ones go out too when the local
+        # machine is busy.
         #
-        # The host key is pinned system-wide because the ssh'ing party is the
-        # root daemon, which has no known_hosts and never gets a tty to
+        # The host keys are pinned system-wide because the ssh'ing party is
+        # the root daemon, which has no known_hosts and never gets a tty to
         # answer a trust prompt.
         programs.ssh.knownHosts."builder" = {
           extraHostNames = [ "5.9.71.104" "builder.tailf5eaab.ts.net" ];
           publicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHnKIrxYtlovvYGgkpEZXY8wG/CuSLMGOM/84eIlyeVW";
         };
+        programs.ssh.knownHosts."eu.nixbuild.net" = {
+          publicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPIQCZc54poJ8vqawd8TraNryQeJnvH1eLpIDgbiqymM";
+        };
         nix.distributedBuilds = true;
-        nix.buildMachines = [{
-          hostName = "builder";
-          sshUser = "builder";
-          # The daemon (root) does the ssh'ing, so it needs an explicit
-          # on-disk key — it has no access to a user's agent.
-          sshKey = "/home/mads/.ssh/id_ed25519";
-          protocol = "ssh-ng";
-          system = "x86_64-linux";
-          maxJobs = 16;
-          supportedFeatures = [ "big-parallel" "kvm" "nixos-test" ];
-        }];
+        nix.buildMachines = [
+          {
+            hostName = "builder";
+            sshUser = "builder";
+            # The daemon (root) does the ssh'ing, so it needs an explicit
+            # on-disk key — it has no access to a user's agent.
+            sshKey = "/home/mads/.ssh/id_ed25519";
+            protocol = "ssh-ng";
+            system = "x86_64-linux";
+            maxJobs = 16;
+            supportedFeatures = [ "big-parallel" "kvm" "nixos-test" ];
+          }
+          # nixbuild.net, for both architectures. Listed after `builder` so
+          # the machine we already pay for is preferred.
+          #
+          # Every feature it supports is advertised, not just the two in the
+          # quickstart: nix only sends a derivation to a builder claiming
+          # *every* feature that derivation requires, so omitting `kvm` or
+          # `nixos-test` would silently route those back to local builds.
+          {
+            hostName = "eu.nixbuild.net";
+            sshUser = "root";
+            sshKey = "/home/mads/.ssh/id_ed25519";
+            protocol = "ssh-ng";
+            system = "x86_64-linux";
+            maxJobs = 100;
+            supportedFeatures = [ "benchmark" "big-parallel" "ca-derivations" "kvm" "nixos-test" ];
+          }
+          {
+            hostName = "eu.nixbuild.net";
+            sshUser = "root";
+            sshKey = "/home/mads/.ssh/id_ed25519";
+            protocol = "ssh-ng";
+            system = "aarch64-linux";
+            maxJobs = 100;
+            supportedFeatures = [ "benchmark" "big-parallel" "ca-derivations" "kvm" "nixos-test" ];
+          }
+        ];
 
         networking.networkmanager.enable = true;
         networking.networkmanager.wifi.backend = "iwd";
@@ -274,6 +317,24 @@
         programs.hyprland = { enable = true; withUWSM = true; };
         programs.hyprlock.enable = true;
         services.hypridle.enable = true;
+
+        # ── Amphetamine-style "stay awake" ──
+        # caffeine.service holds ONE logind block-inhibitor covering all three
+        # ways this machine can go dark:
+        #   idle              -> hypridle stops counting (no blank, no hyprlock)
+        #   sleep             -> suspend requests are refused
+        #   handle-lid-switch -> closing the lid does nothing
+        # systemd owns the process, so "is it on?" is just "is the unit
+        # active?" -- no pidfile, and it can't be orphaned. Deliberately no
+        # wantedBy: it only ever starts via SUPER+A or the `caffeine` command.
+        systemd.user.services.caffeine = {
+          description = "Caffeine - inhibit idle, sleep and lid-switch";
+          serviceConfig = {
+            Type = "simple";
+            ExecStart = "${pkgs.systemd}/bin/systemd-inhibit --what=idle:sleep:handle-lid-switch --who=caffeine --why=stay-awake --mode=block ${pkgs.coreutils}/bin/sleep infinity";
+          };
+        };
+
         xdg.portal = {
           enable = true;
           extraPortals = [ pkgs.xdg-desktop-portal-hyprland ];
@@ -289,6 +350,8 @@
           };
         };
 
+        virtualisation.docker.enable = true;
+
         hardware.bluetooth.enable = true;
         programs.zsh.enable = true;
         fonts.packages = [ pkgs.nerd-fonts.jetbrains-mono ];
@@ -297,11 +360,46 @@
           git kitty fuzzel gimp
           wl-clipboard grim slurp swaybg brightnessctl playerctl grimblast
           hyprpolkitagent xdg-utils
+
+          # Front-end for caffeine.service (above). Bound to SUPER+A.
+          (writeShellApplication {
+            name = "caffeine";
+            runtimeInputs = [ systemd ];
+            text = ''
+              unit=caffeine.service
+
+              is_on() { systemctl --user is-active --quiet "$unit"; }
+
+              # Guarded so `caffeine` still works over SSH / with no compositor.
+              toast() {
+                command -v hyprctl >/dev/null 2>&1 || return 0
+                hyprctl notify "$1" 2000 "$2" "$3" >/dev/null 2>&1 || true
+              }
+
+              wake_on() {
+                systemctl --user start "$unit"
+                toast 5 "rgb(5eff6c)" "Caffeine ON - idle, sleep and lid disabled"
+              }
+
+              wake_off() {
+                systemctl --user stop "$unit"
+                toast 1 "rgb(ff6e5e)" "Caffeine OFF - normal sleep restored"
+              }
+
+              case "''${1:-toggle}" in
+                toggle) if is_on; then wake_off; else wake_on; fi ;;
+                on)     wake_on ;;
+                off)    wake_off ;;
+                status) if is_on; then echo on; else echo off; fi ;;
+                *)      echo "usage: caffeine [toggle|on|off|status]" >&2; exit 2 ;;
+              esac
+            '';
+          })
         ];
 
         users.users.mads = {
           isNormalUser = true;
-          extraGroups = [ "wheel" "networkmanager" "video" ];
+          extraGroups = [ "wheel" "networkmanager" "video" "docker" ];
           shell = pkgs.zsh;
           initialPassword = "changeme"; # CHANGE after first boot (`passwd`)
         };
@@ -346,6 +444,16 @@
               boot.loader.systemd-boot.configurationLimit = 3; # 500M ESP is small
               boot.extraModprobeConfig = "options hid_apple fnmode=1";
               boot.blacklistedKernelModules = [ "pcspkr" ];
+
+              # Root is btrfs (p8). A scrub re-reads every block and verifies its
+              # checksum, which is the only way bit rot on this SSD surfaces before
+              # something tries to read the damaged file. Metadata is DUP, so a bad
+              # metadata block gets repaired from its copy automatically.
+              services.btrfs.autoScrub = {
+                enable = true;
+                interval = "monthly";
+                fileSystems = [ "/" ];
+              };
 
               # Build x86_64 derivations (packing-station iso/deploys) via qemu.
               boot.binfmt.emulatedSystems = [ "x86_64-linux" ];

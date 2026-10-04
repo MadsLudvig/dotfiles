@@ -13,9 +13,13 @@
   boot.kernelModules = [ ];
   boot.extraModulePackages = [ ];
 
+  # Root lives on nvme0n1p8 (btrfs, subvol @) — the 256G reclaimed from
+  # the shrunk macOS container. The old ext4 p5 is kept as a rollback until
+  # it is added to this pool as a second device.
   fileSystems."/" =
-    { device = "/dev/disk/by-uuid/2664fdc1-4309-4682-a02e-4e27eb1e14f6";
-      fsType = "ext4";
+    { device = "/dev/disk/by-uuid/c828c1a0-ce7b-4e27-b8e4-bce032bb30bf";
+      fsType = "btrfs";
+      options = [ "subvol=@" "compress=zstd" "noatime" ];
     };
 
   fileSystems."/boot" =
