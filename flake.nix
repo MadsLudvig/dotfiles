@@ -629,6 +629,18 @@
               boot.loader.systemd-boot.enable = true;
               boot.loader.efi.canTouchEfiVariables = true; # normal x86 UEFI
 
+              # Desktop: never suspend or hibernate, even if something asks.
+              systemd.sleep.settings.Sleep = {
+                AllowSuspend = "no";
+                AllowHibernation = "no";
+                AllowHybridSleep = "no";
+                AllowSuspendThenHibernate = "no";
+              };
+              # Ignore the keys that would normally trigger sleep.
+              services.logind.suspendKey = "ignore";
+              services.logind.hibernateKey = "ignore";
+              services.logind.lidSwitch = "ignore";
+
               # NVIDIA (RTX 20-series or newer → open kernel module).
               services.xserver.videoDrivers = [ "nvidia" ];
               hardware.graphics.enable = true; # OpenGL/Vulkan userspace (was hardware.opengl)
