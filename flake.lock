@@ -78,26 +78,6 @@
         "type": "github"
       }
     },
-    "hyprland-virtual-desktops": {
-      "inputs": {
-        "nixpkgs": [
-          "nixpkgs"
-        ]
-      },
-      "locked": {
-        "lastModified": 1790338297,
-        "narHash": "sha256-iJP+CyrS/fw/dqysRN9GtVB8GlJZcja4rkjBeJsXFsg=",
-        "owner": "levnikmyskin",
-        "repo": "hyprland-virtual-desktops",
-        "rev": "74b88ee5209c4dcea74eedc4646e185b02a8f946",
-        "type": "github"
-      },
-      "original": {
-        "owner": "levnikmyskin",
-        "repo": "hyprland-virtual-desktops",
-        "type": "github"
-      }
-    },
     "linear-tui-src": {
       "flake": false,
       "locked": {
@@ -136,7 +116,6 @@
         "apple-silicon": "apple-silicon",
         "firefox-addons": "firefox-addons",
         "home-manager": "home-manager",
-        "hyprland-virtual-desktops": "hyprland-virtual-desktops",
         "linear-tui-src": "linear-tui-src",
         "nixpkgs": "nixpkgs",
         "zen-browser": "zen-browser"
@@ -152,11 +131,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1786347712,
-        "narHash": "sha256-yH+jWXH2TVd5h3J5KoZiE8/4O4HqoggfB0zl9uVj39w=",
+        "lastModified": 1791266850,
+        "narHash": "sha256-F/scdmE9Y03TfSQWrBHaJWTRTr3rRQBqvJSDgF48g1c=",
         "owner": "0xc000022070",
         "repo": "zen-browser-flake",
-        "rev": "945efbc704b7f8c1731a922aabbc5d95edc9eb74",
+        "rev": "d9e4e25d6ade5d541074045d332d887c044e11f5",
         "type": "github"
       },
       "original": {

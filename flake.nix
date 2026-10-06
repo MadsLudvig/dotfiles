@@ -32,18 +32,9 @@
       url = "github:k1-c/linear-tui/v0.13.0";
       flake = false;
     };
-
-    # Virtual desktops: one desktop spans all monitors, replacing Hyprland's
-    # workspace-pinned-to-monitor model. Its own nixpkgs pin is older than
-    # ours, and Hyprland plugins are ABI-locked to the compositor, so it must
-    # follow ours to compile against the hyprland we actually run.
-    hyprland-virtual-desktops = {
-      url = "github:levnikmyskin/hyprland-virtual-desktops";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
   };
 
-  outputs = { self, nixpkgs, apple-silicon, home-manager, firefox-addons, zen-browser, linear-tui-src, hyprland-virtual-desktops, ... }:
+  outputs = { self, nixpkgs, apple-silicon, home-manager, firefox-addons, zen-browser, linear-tui-src, ... }:
     let
       # linear-tui, built from the pinned source input above. Upstream ships no
       # flake and it is not in nixpkgs, but it has a committed Cargo.lock, so
@@ -93,15 +84,14 @@
               monitor = desc:Lenovo Group Limited P27q-20 V909LPNY, 2560x1440@60, 2560x0, 1.0
               monitor = desc:Lenovo Group Limited P27q-20 V909LRDD, 2560x1440@60, 5120x0, 1.0
 
+              # Each screen's home workspace; SUPER+ALT+h/l can still move it.
+              workspace = 1, monitor:desc:Lenovo Group Limited P27q-20 V909LRFR, default:true
+              workspace = 2, monitor:desc:Lenovo Group Limited P27q-20 V909LPNY, default:true
+              workspace = 3, monitor:desc:Lenovo Group Limited P27q-20 V909LRDD, default:true
+
               # Same panels, sized for 2560x1440 logical.
               windowrule = match:class ^(panel-wifi|panel-bt)$, float on, size 1792 1440, center on
             '';
-          # Plugin load line, as a store path. Sourced from hyprland.conf, the
-          # same pattern as monitors.conf. Upstream installs the library as
-          # libvirtual-desktops.so (not lib<pname>.so).
-          "hypr/plugins.conf".text = ''
-            plugin = ${hyprland-virtual-desktops.packages.${pkgs.stdenv.hostPlatform.system}.virtual-desktops}/lib/libvirtual-desktops.so
-          '';
           "eww".source    = ./config/eww;
           "fuzzel".source = ./config/fuzzel;
         };
@@ -379,8 +369,25 @@
           }
         ];
 
-        networking.networkmanager.enable = true;
-        networking.networkmanager.wifi.backend = "iwd";
+        # iwd owns Wi-Fi (driven from impala, which is iwd-only); networkd does
+        # DHCP and resolved does DNS. No NetworkManager: running it on top of
+        # iwd meant two managers with separate saved networks, which ended in
+        # "Secrets were required, but not provided".
+        networking.wireless.iwd.enable = true;
+        networking.useNetworkd = true; # DHCP on any ethernet/wifi by default
+        systemd.network.wait-online.anyInterface = true; # one link up is enough
+
+        # iwd only reads /var/lib/iwd. C = copy once, so a password added to
+        # the file later (or via impala) is never overwritten.
+        systemd.tmpfiles.rules = [
+          "C /var/lib/iwd/eduroam.8021x 0600 root root - ${pkgs.writeText "eduroam.8021x" ''
+            [Security]
+            EAP-Method=PEAP
+            EAP-Identity=447087@net.aau.dk
+            EAP-PEAP-Phase2-Method=MSCHAPV2
+            EAP-PEAP-Phase2-Identity=447087@net.aau.dk
+          ''}"
+        ];
 
         # Secret Service (org.freedesktop.secrets) provider, D-Bus-activated on
         # demand. Without it 1Password can't persist the 2FA device token
@@ -515,7 +522,7 @@
 
         users.users.mads = {
           isNormalUser = true;
-          extraGroups = [ "wheel" "networkmanager" "video" "docker" ];
+          extraGroups = [ "wheel" "video" "docker" ];
           shell = pkgs.zsh;
           initialPassword = "changeme"; # CHANGE after first boot (`passwd`)
         };
@@ -602,6 +609,7 @@
                 enable = true;
                 nssmdns4 = true;
               };
+              services.resolved.settings.Resolve.MulticastDNS = false; # avahi owns mDNS
 
               # Asahi kernel + Mesa cache, and the Raspberry Pi vendor
               # kernel/firmware cache (else both compile from source).
@@ -626,6 +634,19 @@
             ./hosts/pc/hardware-configuration.nix # generated on the PC
             ({ config, ... }: {
               networking.hostName = "pc";
+
+              # GigE camera link: static, never a route out. The segment also
+              # carries AAU's IPv6 RAs, and taking them made v6 traffic default
+              # out this port into a dead end.
+              networking.interfaces.enp7s0 = {
+                useDHCP = false;
+                ipv4.addresses = [ { address = "192.168.12.1"; prefixLength = 24; } ];
+              };
+              systemd.network.networks."40-enp7s0" = {
+                networkConfig.IPv6AcceptRA = false;
+                networkConfig.ConfigureWithoutCarrier = true; # camera may be off
+                linkConfig.RequiredForOnline = "no";
+              };
               boot.loader.systemd-boot.enable = true;
               boot.loader.efi.canTouchEfiVariables = true; # normal x86 UEFI
 
