@@ -82,12 +82,12 @@
             else ''
               monitor = desc:Lenovo Group Limited P27q-20 V909LRFR, 2560x1440@60, 0x0, 1.0
               monitor = desc:Lenovo Group Limited P27q-20 V909LPNY, 2560x1440@60, 2560x0, 1.0
-              monitor = desc:Lenovo Group Limited P27q-20 V909LRDD, 2560x1440@60, 5120x0, 1.0
+              monitor = desc:ASUSTek COMPUTER INC XG32UQWMS W6LMQS013451, 3840x2160@240, 5120x0, 1.333333
 
               # Each screen's home workspace; SUPER+ALT+h/l can still move it.
               workspace = 1, monitor:desc:Lenovo Group Limited P27q-20 V909LRFR, default:true
               workspace = 2, monitor:desc:Lenovo Group Limited P27q-20 V909LPNY, default:true
-              workspace = 3, monitor:desc:Lenovo Group Limited P27q-20 V909LRDD, default:true
+              workspace = 3, monitor:desc:ASUSTek COMPUTER INC XG32UQWMS W6LMQS013451, default:true
 
               # Same panels, sized for 2560x1440 logical.
               windowrule = match:class ^(panel-wifi|panel-bt)$, float on, size 1792 1440, center on
@@ -671,6 +671,10 @@
                 nvidiaSettings = true;
                 package = config.boot.kernelPackages.nvidiaPackages.stable;
               };
+
+              # Steam's client binary is 32-bit; this also turns on
+              # hardware.graphics.enable32Bit so it gets 32-bit NVIDIA GL.
+              programs.steam.enable = true;
             })
           ];
         };
