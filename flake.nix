@@ -92,6 +92,28 @@
               # Same panels, sized for 2560x1440 logical.
               windowrule = match:class ^(panel-wifi|panel-bt)$, float on, size 1792 1440, center on
             '';
+          # Idle: lock after 10 min everywhere. Only the laptop blanks its
+          # panel first; the PC's monitors go to sleep on their own.
+          "hypr/hypridle.conf".text = ''
+            general {
+                lock_cmd = pidof hyprlock || hyprlock
+                before_sleep_cmd = loginctl lock-session
+                after_sleep_cmd = hyprctl dispatch dpms on
+            }
+          '' + nixpkgs.lib.optionalString (osConfig.networking.hostName == "mbp") ''
+
+            listener {
+                timeout = 300
+                on-timeout = hyprctl dispatch dpms off
+                on-resume = hyprctl dispatch dpms on
+            }
+          '' + ''
+
+            listener {
+                timeout = 600
+                on-timeout = loginctl lock-session
+            }
+          '';
           "eww".source    = ./config/eww;
           "fuzzel".source = ./config/fuzzel;
         };
@@ -291,7 +313,7 @@
           };
         };
 
-        home.packages = with pkgs; [ ripgrep fd tridactyl-native lazygit rustc cargo clippy rustfmt rust-analyzer claude-code gcc bluetui impala postgresql fastfetch (linearTui pkgs) ];
+        home.packages = with pkgs; [ ripgrep fd tridactyl-native lazygit rustc cargo clippy rustfmt rust-analyzer claude-code gcc bluetui impala postgresql fastfetch remmina unzip (linearTui pkgs) ];
       };
 
       # ───────────────────── shared system (both hosts) ─────────────────────
@@ -437,23 +459,6 @@
         security.pam.services.hyprlock.enableGnomeKeyring = true;
         services.hypridle.enable = true;
 
-        # ── Amphetamine-style "stay awake" ──
-        # caffeine.service holds ONE logind block-inhibitor covering all three
-        # ways this machine can go dark:
-        #   idle              -> hypridle stops counting (no blank, no hyprlock)
-        #   sleep             -> suspend requests are refused
-        #   handle-lid-switch -> closing the lid does nothing
-        # systemd owns the process, so "is it on?" is just "is the unit
-        # active?" -- no pidfile, and it can't be orphaned. Deliberately no
-        # wantedBy: it only ever starts via SUPER+A or the `caffeine` command.
-        systemd.user.services.caffeine = {
-          description = "Caffeine - inhibit idle, sleep and lid-switch";
-          serviceConfig = {
-            Type = "simple";
-            ExecStart = "${pkgs.systemd}/bin/systemd-inhibit --what=idle:sleep:handle-lid-switch --who=caffeine --why=stay-awake --mode=block ${pkgs.coreutils}/bin/sleep infinity";
-          };
-        };
-
         xdg.portal = {
           enable = true;
           extraPortals = [ pkgs.xdg-desktop-portal-hyprland ];
@@ -483,41 +488,6 @@
           git kitty fuzzel
           wl-clipboard grim slurp swaybg brightnessctl playerctl hyprshot
           hyprpolkitagent xdg-utils
-
-          # Front-end for caffeine.service (above). Bound to SUPER+A.
-          (writeShellApplication {
-            name = "caffeine";
-            runtimeInputs = [ systemd ];
-            text = ''
-              unit=caffeine.service
-
-              is_on() { systemctl --user is-active --quiet "$unit"; }
-
-              # Guarded so `caffeine` still works over SSH / with no compositor.
-              toast() {
-                command -v hyprctl >/dev/null 2>&1 || return 0
-                hyprctl notify "$1" 2000 "$2" "$3" >/dev/null 2>&1 || true
-              }
-
-              wake_on() {
-                systemctl --user start "$unit"
-                toast 5 "rgb(5eff6c)" "Caffeine ON - idle, sleep and lid disabled"
-              }
-
-              wake_off() {
-                systemctl --user stop "$unit"
-                toast 1 "rgb(ff6e5e)" "Caffeine OFF - normal sleep restored"
-              }
-
-              case "''${1:-toggle}" in
-                toggle) if is_on; then wake_off; else wake_on; fi ;;
-                on)     wake_on ;;
-                off)    wake_off ;;
-                status) if is_on; then echo on; else echo off; fi ;;
-                *)      echo "usage: caffeine [toggle|on|off|status]" >&2; exit 2 ;;
-              esac
-            '';
-          })
         ];
 
         users.users.mads = {
@@ -697,7 +667,7 @@
                 description = "Case lighting (hosts/pc/rgb.py)";
                 wantedBy = [ "multi-user.target" ];
                 serviceConfig = {
-                  ExecStart = "${pkgs.python3}/bin/python3 ${./hosts/pc/rgb.py} mask --keepalive";
+                  ExecStart = "${pkgs.python3}/bin/python3 -u ${./hosts/pc/rgb.py} mask --keepalive";
                   Restart = "always";
                   RestartSec = 5;
                 };
