@@ -632,7 +632,7 @@
           system = "x86_64-linux";
           modules = [
             ./hosts/pc/hardware-configuration.nix # generated on the PC
-            ({ config, ... }: {
+            ({ config, pkgs, ... }: {
               networking.hostName = "pc";
 
               # GigE camera link: static, never a route out. The segment also
@@ -675,6 +675,33 @@
               # Steam's client binary is 32-bit; this also turns on
               # hardware.graphics.enable32Bit so it gets 32-bit NVIDIA GL.
               programs.steam.enable = true;
+
+              # ── RGB ──
+              # What is in the case (surveyed via /sys/bus/usb, 2026-10-15):
+              #   1b1c:0c1a  Corsair Lighting Node CORE  6 fans (3 LL, 3 QL), USB HID
+              #   0b05:19af  ASUS AURA LED Controller    the board's own LEDs, USB HID
+              #              (the Lian Li case has no controller of its own; its
+              #              strips would be on this board's ARGB headers)
+              #   10de:2484  Gigabyte RTX 3070 Vision    i2c on the card's own bus
+              #   1e71:3008  NZXT Kraken Z53/Z63/Z73     the LCD, USB HID (the
+              #              kernel's nzxt_kraken3 does fans/pump)
+              #
+              # hosts/pc/rgb.py drives all four directly, with the byte
+              # layouts taken from OpenRGB and liquidctl; neither is installed.
+              # Colours and the list of dead fan LEDs live in the script. It
+              # stays resident because the Corsair hub blanks its per-LED mode
+              # without a commit every few seconds. Restart=always also covers
+              # the devices not being enumerated yet at boot.
+              boot.kernelModules = [ "i2c-dev" ]; # /dev/i2c-* for the GPU
+              systemd.services.rgb = {
+                description = "Case lighting (hosts/pc/rgb.py)";
+                wantedBy = [ "multi-user.target" ];
+                serviceConfig = {
+                  ExecStart = "${pkgs.python3}/bin/python3 ${./hosts/pc/rgb.py} mask --keepalive";
+                  Restart = "always";
+                  RestartSec = 5;
+                };
+              };
             })
           ];
         };
