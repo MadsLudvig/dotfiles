@@ -39,7 +39,7 @@
             config = {
               input = {
                 kb_layout = "us,dk";
-                kb_options = "grp:win_space_toggle";
+                kb_options = "caps:ctrl_modifier,grp:win_space_toggle";
                 repeat_rate = 50;
                 repeat_delay = 300;
                 accel_profile = "custom";
@@ -56,6 +56,7 @@
               animations.enabled = false;
               dwindle = { preserve_split = true; force_split = 2; };
               misc = {
+                background_color = "rgb(16181a)";
                 disable_hyprland_logo = true;
                 disable_splash_rendering = true;
                 focus_on_activate = true;
@@ -71,9 +72,6 @@
               { output = ""; mode = "preferred"; position = "auto"; scale = 2.0; }
             ];
 
-            device = [
-              { name = "apple-spi-keyboard"; kb_options = "caps:ctrl_modifier,grp:win_space_toggle"; }
-            ];
 
             window_rule = [ { match.class = ".*"; suppress_event = "maximize"; } ];
 
@@ -85,10 +83,6 @@
             -- -- Autostart (runs once, like exec-once) --
             hl.on("hyprland.start", function()
                 hl.exec_cmd("uwsm finalize")
-                -- Boot lands on the lock screen rather than an unlocked desktop. Unlocking
-                -- it also unlocks the keyring (security.pam.services.hyprlock in `common`).
-                hl.exec_cmd("hyprlock")
-                hl.exec_cmd("swaybg -c '#16181a'")
                 hl.exec_cmd("systemctl --user start hyprpolkitagent")
             end)
 
@@ -223,7 +217,7 @@
           package = null;
           settings = {
             general = {
-              lock_cmd = "pidof hyprlock || hyprlock";
+              lock_cmd = "hyprlock";
               before_sleep_cmd = "loginctl lock-session";
               after_sleep_cmd = "hyprctl dispatch dpms on";
             };
@@ -300,16 +294,13 @@
           name = "Bibata-Modern-Ice";
           size = 24;
           gtk.enable = true;
-          x11.enable = true;
           hyprcursor.enable = true;
         };
 
         gtk = {
           enable = true;
-          theme = { name = "Adwaita-dark"; package = pkgs.gnome-themes-extra; };
           gtk3.extraConfig.gtk-application-prefer-dark-theme = 1;
           gtk4.extraConfig.gtk-application-prefer-dark-theme = 1;
-          gtk4.theme = null;
         };
 
         programs.nixvim = {
@@ -481,7 +472,6 @@
       # ───────────────────── shared system (both hosts) ─────────────────────
       common = { pkgs, ... }: {
         nix.settings.experimental-features = [ "nix-command" "flakes" ];
-        nix.settings.trusted-users = [ "mads" ];
         nix.settings.extra-substituters = [ "https://deepvis.cachix.org" ];
         nix.settings.extra-trusted-public-keys = [
           "deepvis.cachix.org-1:UE/H6ERLwqhSqubzh8+pzl9eTm0kpMExGe0ym6fENp8="
@@ -510,15 +500,18 @@
         programs.hyprlock.enable = true;
 
         systemd.user.services."wayland-wm@".serviceConfig.OOMPolicy = "continue";
-        security.pam.services.hyprlock.enableGnomeKeyring = true;
         services.hypridle.enable = true;
 
 
         services.greetd = {
           enable = true;
           settings = {
-            initial_session = { user = "mads"; command = "uwsm start -eD Hyprland hyprland.desktop"; };
-            default_session = { user = "mads"; command = "uwsm start -eD Hyprland hyprland.desktop"; };
+            # tuigreet asks for the password, so PAM (greetd substacks `login`, which
+            # carries pam_gnome_keyring) unlocks the keyring at login. Then uwsm runs
+            # hyprland.desktop, whose Exec is start-hyprland; -eD sets XDG_CURRENT_DESKTOP
+            # to exactly "Hyprland", as upstream's hyprland-uwsm.desktop does.
+            default_session.command =
+              "${pkgs.tuigreet}/bin/tuigreet --cmd 'uwsm start -eD Hyprland hyprland.desktop'";
           };
         };
 
@@ -532,7 +525,7 @@
 
         environment.systemPackages = with pkgs; [
           git
-          wl-clipboard swaybg brightnessctl playerctl hyprshot
+          wl-clipboard brightnessctl playerctl hyprshot
           hyprpolkitagent xdg-utils
         ];
 
@@ -725,8 +718,6 @@
               systemd.sleep.settings.Sleep = {
                 AllowSuspend = "no";
                 AllowHibernation = "no";
-                AllowHybridSleep = "no";
-                AllowSuspendThenHibernate = "no";
               };
 
 
