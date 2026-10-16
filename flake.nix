@@ -83,6 +83,7 @@
             -- -- Autostart (runs once, like exec-once) --
             hl.on("hyprland.start", function()
                 hl.exec_cmd("uwsm finalize")
+                hl.exec_cmd("hyprlock")  -- boot lands on the lock screen; see greetd in `common`
                 hl.exec_cmd("systemctl --user start hyprpolkitagent")
             end)
 
@@ -501,17 +502,20 @@
 
         systemd.user.services."wayland-wm@".serviceConfig.OOMPolicy = "continue";
         services.hypridle.enable = true;
+        # Autologin sends no password through PAM, so the gnome-keyring login
+        # keyring would never unlock (1Password then re-asks the YubiKey every
+        # time). hyprlock is the first password prompt, so it does that job.
+        security.pam.services.hyprlock.enableGnomeKeyring = true;
 
 
         services.greetd = {
           enable = true;
           settings = {
-            # tuigreet asks for the password, so PAM (greetd substacks `login`, which
-            # carries pam_gnome_keyring) unlocks the keyring at login. Then uwsm runs
+            # Autologin straight into Hyprland, which starts hyprlock first (see the
+            # autostart hook), so boot still lands on a password prompt. uwsm runs
             # hyprland.desktop, whose Exec is start-hyprland; -eD sets XDG_CURRENT_DESKTOP
             # to exactly "Hyprland", as upstream's hyprland-uwsm.desktop does.
-            default_session.command =
-              "${pkgs.tuigreet}/bin/tuigreet --cmd 'uwsm start -eD Hyprland hyprland.desktop'";
+            default_session = { user = "mads"; command = "uwsm start -eD Hyprland hyprland.desktop"; };
           };
         };
 
