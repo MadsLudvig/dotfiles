@@ -1,167 +1,263 @@
 {
   description = "mads — NixOS for Apple Silicon (mbp) and x86 (pc), one flake";
-
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-
     apple-silicon = {
       url = "github:nix-community/nixos-apple-silicon";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-
     home-manager = {
       url = "github:nix-community/home-manager";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-
-    firefox-addons = {
-      url = "gitlab:rycee/nur-expressions?dir=pkgs/firefox-addons";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-
     zen-browser = {
       url = "github:0xc000022070/zen-browser-flake";
       inputs.nixpkgs.follows = "nixpkgs";
       inputs.home-manager.follows = "home-manager";
     };
-
-    # linear-tui has no flake of its own, so take the source and build it below.
-    # Pinned to a tag; `nix flake update` moves it and records the hash in
-    # flake.lock, so there is no sha256 to maintain by hand.
-    linear-tui-src = {
-      url = "github:k1-c/linear-tui/v0.13.0";
-      flake = false;
+    nixvim = {
+      url = "github:nix-community/nixvim";
+      inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
-  outputs = { self, nixpkgs, apple-silicon, home-manager, firefox-addons, zen-browser, linear-tui-src, ... }:
+  outputs = { self, nixpkgs, apple-silicon, home-manager, zen-browser, nixvim, ... }:
     let
-      # linear-tui, built from the pinned source input above. Upstream ships no
-      # flake and it is not in nixpkgs, but it has a committed Cargo.lock, so
-      # cargoLock.lockFile covers the dependency hashes with nothing to vendor.
-      #
-      # No OpenSSL/pkg-config needed: the crate selects reqwest's rustls
-      # backend on purpose, and takes its trust roots from the OS store.
-      linearTui = pkgs: pkgs.rustPlatform.buildRustPackage {
-        pname = "linear-tui";
-        version = "0.13.0";
-        src = linear-tui-src;
-        cargoLock.lockFile = "${linear-tui-src}/Cargo.lock";
-        # One test (a_worktree_belongs_to_its_repository) shells out to `git`,
-        # which the build sandbox lacks -- it panics on NotFound unwrapping
-        # Command::new("git"). Supplying git lets all 512 tests run.
-        nativeCheckInputs = [ pkgs.git ];
-
-        meta.mainProgram = "linear-tui";
-      };
-
       # ───────────────────── shared home-manager user ─────────────────────
-      home = { pkgs, osConfig, ... }: {
-        imports = [ zen-browser.homeModules.beta ];
+      home = { pkgs, lib, osConfig, ... }: {
+        imports = [ zen-browser.homeModules.beta nixvim.homeModules.nixvim ];
         home.stateVersion = "25.11";
 
-        programs.eww = {
+        wayland.windowManager.hyprland = {
           enable = true;
-          package = pkgs.eww;
+          package = null;
+          portalPackage = null;
+          configType = "lua";
+          systemd.enable = false;
+
+          settings = {
+            config = {
+              input = {
+                kb_layout = "us,dk";
+                kb_options = "grp:win_space_toggle";
+                repeat_rate = 50;
+                repeat_delay = 300;
+                accel_profile = "custom";
+                scroll_points = "0.5 1.0 1.5 2.0 2.5";
+                touchpad = {
+                  natural_scroll = true;
+                  scroll_factor = 0.9;
+                  tap_to_click = false;
+                  clickfinger_behavior = true;
+                  disable_while_typing = true;
+                };
+              };
+              general = { gaps_in = 0; gaps_out = 0; border_size = 0; };
+              animations.enabled = false;
+              dwindle = { preserve_split = true; force_split = 2; };
+              misc = {
+                disable_hyprland_logo = true;
+                disable_splash_rendering = true;
+                focus_on_activate = true;
+              };
+              ecosystem = { no_update_news = true; no_donation_nag = true; };
+            };
+
+            monitor = [
+              {
+                output = "desc:ASUSTek COMPUTER INC XG32UQWMS W6LMQS013451";
+                mode = "3840x2160@240"; position = "0x0"; scale = 1.25;
+              }
+              { output = ""; mode = "preferred"; position = "auto"; scale = 2.0; }
+            ];
+
+            device = [
+              { name = "apple-spi-keyboard"; kb_options = "caps:ctrl_modifier,grp:win_space_toggle"; }
+            ];
+
+            window_rule = [ { match.class = ".*"; suppress_event = "maximize"; } ];
+
+            # hyprshot ignores XDG_SCREENSHOTS_DIR; without this, shots land loose in ~/Pictures.
+            env = [ { _args = [ "HYPRSHOT_DIR" (lib.generators.mkLuaInline ''os.getenv("HOME") .. "/Pictures/Screenshots"'') ]; } ];
+          };
+
+          extraConfig = ''
+            -- -- Autostart (runs once, like exec-once) --
+            hl.on("hyprland.start", function()
+                hl.exec_cmd("uwsm finalize")
+                -- Boot lands on the lock screen rather than an unlocked desktop. Unlocking
+                -- it also unlocks the keyring (security.pam.services.hyprlock in `common`).
+                hl.exec_cmd("hyprlock")
+                hl.exec_cmd("swaybg -c '#16181a'")
+                hl.exec_cmd("systemctl --user start hyprpolkitagent")
+            end)
+
+            -- -- Core --
+            hl.bind("SUPER + Return", hl.dsp.exec_cmd("kitty"))
+            hl.bind("SUPER + D", hl.dsp.exec_cmd("fuzzel"))
+            hl.bind("SUPER + Q", hl.dsp.window.close())
+
+            -- Battery readout while SUPER+R is held, as a Hyprland notification.
+            -- Reads sysfs directly (instant, so fine inside a bind); the names
+            -- cover Asahi (macsmc-battery) and x86 (BAT0/BAT1).
+            local function battery()
+                for _, name in ipairs({ "macsmc-battery", "BAT0", "BAT1" }) do
+                    local dir = "/sys/class/power_supply/" .. name
+                    local cap = io.open(dir .. "/capacity")
+                    if cap then
+                        local pct = cap:read("*l"); cap:close()
+                        local st = io.open(dir .. "/status")
+                        local status = st and st:read("*l") or "?"
+                        if st then st:close() end
+                        return pct .. "% " .. status
+                    end
+                end
+                return "no battery"
+            end
+            local batteryPopup
+            hl.bind("SUPER + R", function()
+                batteryPopup = hl.notification.create({ text = battery(), timeout = 10000 })
+            end)
+            hl.bind("SUPER + R", function()
+                if batteryPopup then batteryPopup:dismiss(); batteryPopup = nil end
+            end, { release = true })
+            hl.bind("SUPER + F", hl.dsp.window.fullscreen({ mode = "maximized" }))
+            hl.bind("SUPER + SHIFT + Space", hl.dsp.window.float())
+            hl.bind("SUPER + Escape", hl.dsp.exec_cmd("hyprlock"))
+
+            -- -- Floating panels --
+            -- Each gets its own app_id so only these float and not every terminal.
+            -- Quit with the TUI's own `q`; no toggle wrapper. 70% wide and full
+            -- height of the monitor it opens on, worked out at key press, so it
+            -- follows scale and screen changes without per-host numbers.
+            local function panel(cmd)
+                return function()
+                    local m = hl.get_active_monitor()
+                    local rules = { float = true, center = true }
+                    if m then
+                        rules.size = { math.floor(m.width / m.scale * 0.7), math.floor(m.height / m.scale) }
+                    end
+                    hl.dispatch(hl.dsp.exec_cmd(cmd, rules))
+                end
+            end
+            hl.bind("SUPER + W", panel("kitty --class panel-wifi impala"))
+            hl.bind("SUPER + E", panel("kitty --class panel-bt bluetui"))
+
+            -- -- Focus / move --
+            hl.bind("SUPER + h", hl.dsp.focus({ direction = "left" }))
+            hl.bind("SUPER + j", hl.dsp.focus({ direction = "down" }))
+            hl.bind("SUPER + k", hl.dsp.focus({ direction = "up" }))
+            hl.bind("SUPER + l", hl.dsp.focus({ direction = "right" }))
+            hl.bind("SUPER + SHIFT + h", hl.dsp.window.move({ direction = "left" }))
+            hl.bind("SUPER + SHIFT + j", hl.dsp.window.move({ direction = "down" }))
+            hl.bind("SUPER + SHIFT + k", hl.dsp.window.move({ direction = "up" }))
+            hl.bind("SUPER + SHIFT + l", hl.dsp.window.move({ direction = "right" }))
+
+            -- -- Workspaces (AeroSpace-style) --
+            -- SUPER+N switches to workspace N; SUPER+SHIFT+N sends the window there
+            -- without following it (AeroSpace's move-node-to-workspace).
+            for i = 1, 5 do
+                hl.bind("SUPER + " .. i, hl.dsp.focus({ workspace = i }))
+                hl.bind("SUPER + SHIFT + " .. i, hl.dsp.window.move({ workspace = i, follow = false }))
+            end
+            hl.bind("SUPER + Tab", hl.dsp.focus({ workspace = "previous" }))
+
+            -- -- Resize (hold to repeat) / mouse --
+            hl.bind("SUPER + CTRL + h", hl.dsp.window.resize({ x = -40, y = 0, relative = true }), { repeating = true })
+            hl.bind("SUPER + CTRL + j", hl.dsp.window.resize({ x = 0, y = 40, relative = true }), { repeating = true })
+            hl.bind("SUPER + CTRL + k", hl.dsp.window.resize({ x = 0, y = -40, relative = true }), { repeating = true })
+            hl.bind("SUPER + CTRL + l", hl.dsp.window.resize({ x = 40, y = 0, relative = true }), { repeating = true })
+            hl.bind("SUPER + mouse:272", hl.dsp.window.drag(), { mouse = true })
+            hl.bind("SUPER + mouse:273", hl.dsp.window.resize(), { mouse = true })
+
+            -- -- Media keys (locked: work on the lock screen; repeating: hold to repeat) --
+            hl.bind("XF86AudioRaiseVolume", hl.dsp.exec_cmd("wpctl set-volume -l 1.0 @DEFAULT_AUDIO_SINK@ 5%+"), { locked = true, repeating = true })
+            hl.bind("XF86AudioLowerVolume", hl.dsp.exec_cmd("wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-"),        { locked = true, repeating = true })
+            hl.bind("XF86AudioMute",        hl.dsp.exec_cmd("wpctl set-mute   @DEFAULT_AUDIO_SINK@ toggle"),     { locked = true })
+            hl.bind("XF86AudioMicMute",     hl.dsp.exec_cmd("wpctl set-mute   @DEFAULT_AUDIO_SOURCE@ toggle"),   { locked = true })
+            hl.bind("XF86MonBrightnessUp",   hl.dsp.exec_cmd("brightnessctl set 5%+"), { locked = true, repeating = true })
+            hl.bind("XF86MonBrightnessDown", hl.dsp.exec_cmd("brightnessctl set 5%-"), { locked = true, repeating = true })
+            hl.bind("XF86AudioPlay", hl.dsp.exec_cmd("playerctl play-pause"), { locked = true })
+            hl.bind("XF86AudioNext", hl.dsp.exec_cmd("playerctl next"),       { locked = true })
+            hl.bind("XF86AudioPrev", hl.dsp.exec_cmd("playerctl previous"),   { locked = true })
+
+            -- -- Screenshots: focused monitor / region (screen frozen) -> file + clipboard --
+            hl.bind("SUPER + CTRL + S", hl.dsp.exec_cmd("hyprshot -m output"))
+            hl.bind("SUPER + SHIFT + S", hl.dsp.exec_cmd("hyprshot -m region -z"))
+          '';
         };
 
-        # Raw configs that stay files (no good native module).
-        # `hypr` is recursive so we can drop a host-specific monitors.conf in
-        # alongside the shared files (hyprland.conf `source`s it).
-        xdg.configFile = {
-          "hypr" = { source = ./config/hypr; recursive = true; };
-          "hypr/monitors.conf".text =
-            if osConfig.networking.hostName == "mbp"
-            then ''
-              monitor = , preferred, auto, 2.0
-
-              # Floating TUI panels: 70% wide, full height. Absolute px because
-              # Hyprland 0.56 ignores percentages in `size`. 1728x1080 logical.
-              windowrule = match:class ^(panel-wifi|panel-bt)$, float on, size 1210 1080, center on
-            ''
-            else ''
-              monitor = desc:Lenovo Group Limited P27q-20 V909LRFR, 2560x1440@60, 0x0, 1.0
-              monitor = desc:Lenovo Group Limited P27q-20 V909LPNY, 2560x1440@60, 2560x0, 1.0
-              monitor = desc:ASUSTek COMPUTER INC XG32UQWMS W6LMQS013451, 3840x2160@240, 5120x0, 1.333333
-
-              # Each screen's home workspace; SUPER+ALT+h/l can still move it.
-              workspace = 1, monitor:desc:Lenovo Group Limited P27q-20 V909LRFR, default:true
-              workspace = 2, monitor:desc:Lenovo Group Limited P27q-20 V909LPNY, default:true
-              workspace = 3, monitor:desc:ASUSTek COMPUTER INC XG32UQWMS W6LMQS013451, default:true
-
-              # Same panels, sized for 2560x1440 logical.
-              windowrule = match:class ^(panel-wifi|panel-bt)$, float on, size 1792 1440, center on
-            '';
-          # Idle: lock after 10 min everywhere. Only the laptop blanks its
-          # panel first; the PC's monitors go to sleep on their own.
-          "hypr/hypridle.conf".text = ''
-            general {
-                lock_cmd = pidof hyprlock || hyprlock
-                before_sleep_cmd = loginctl lock-session
-                after_sleep_cmd = hyprctl dispatch dpms on
-            }
-          '' + nixpkgs.lib.optionalString (osConfig.networking.hostName == "mbp") ''
-
-            listener {
-                timeout = 300
-                on-timeout = hyprctl dispatch dpms off
-                on-resume = hyprctl dispatch dpms on
-            }
-          '' + ''
-
-            listener {
-                timeout = 600
-                on-timeout = loginctl lock-session
-            }
-          '';
-          "eww".source    = ./config/eww;
-          "fuzzel".source = ./config/fuzzel;
+        programs.hyprlock = {
+          enable = true;
+          package = null;
+          settings = {
+            general = {
+              hide_cursor = true;
+              disable_loading_bar = true;
+              no_fade_in = true;
+              no_fade_out = true;
+            };
+            background = [ { color = "rgb(000000)"; } ];
+            input-field = [{
+              size = "400, 60";
+              outline_thickness = 20;
+              rounding = 0;
+              outer_color = "rgba(ffffffff)";
+              inner_color = "rgba(000000ff)";
+              font_color = "rgb(ffffff)";
+              font_family = "JetBrainsMono Nerd Font";
+              font_size = 16;
+              fade_on_empty = false;
+              fade_timeout = 0;
+              placeholder_text = "";
+              hide_input = true;
+              fail_color = "rgb(ff5555)";
+              fail_text = "";
+              capslock_color = "rgb(ffb000)";
+            }];
+          };
         };
 
-
-        # Launcher hygiene. These .desktop entries ship with packages we do want,
-        # but they are noise in fuzzel. A NoDisplay entry in XDG_DATA_HOME
-        # shadows the package's own copy, which is the only way to hide one
-        # without patching the package.
-        #
-        # Deliberately home.file and NOT xdg.desktopEntries: that option only
-        # emits anything when xdg.enable = true, which we don't set, so it
-        # silently produces no files at all.
-        #   nvim  - neovim's "Neovim wrapper" entry; we only launch it from a terminal
-        #   uuctl - uwsm's systemd-user-unit picker, pulled in by withUWSM
-        home.file = {
-          ".local/share/applications/nvim.desktop".text = ''
-            [Desktop Entry]
-            Type=Application
-            Name=Neovim wrapper
-            NoDisplay=true
-          '';
-          ".local/share/applications/uuctl.desktop".text = ''
-            [Desktop Entry]
-            Type=Application
-            Name=uuctl
-            NoDisplay=true
-          '';
+        services.hypridle = {
+          enable = true;
+          package = null;
+          settings = {
+            general = {
+              lock_cmd = "pidof hyprlock || hyprlock";
+              before_sleep_cmd = "loginctl lock-session";
+              after_sleep_cmd = "hyprctl dispatch dpms on";
+            };
+            listener = lib.optional (osConfig.networking.hostName == "mbp") {
+              timeout = 300;
+              on-timeout = "hyprctl dispatch dpms off";
+              on-resume = "hyprctl dispatch dpms on";
+            } ++ [{
+              timeout = 600;
+              on-timeout = "loginctl lock-session";
+            }];
+          };
         };
 
-        # Notification daemon. Nothing owned org.freedesktop.Notifications before
-        # this, so notify-send failed outright: hyprshot's "Screenshot saved"
-        # toasts went nowhere, and kitty logged a DBus ServiceUnknown error on
-        # every launch. Colours match the cyberdream kitty theme above.
-        services.mako = {
+        programs.fuzzel = {
           enable = true;
           settings = {
-            font = "JetBrainsMono Nerd Font 11";
-            background-color = "#16181a";
-            text-color = "#ffffff";
-            border-color = "#5ea1ff";
-            border-size = 2;
-            border-radius = 8;
-            default-timeout = 5000;
-            anchor = "top-right";
-            margin = "12";
-            padding = "12";
-            width = 380;
+            main = {
+              font = "JetBrainsMono Nerd Font:size=12";
+              terminal = "kitty";
+              lines = 8;
+              width = 40;
+              horizontal-pad = 16;
+              vertical-pad = 12;
+              inner-pad = 4;
+            };
+            colors = {
+              background = "16181aff";
+              text = "ffffffff";
+              match = "ff6e5eff";
+              selection = "3c4048ff";
+              selection-text = "ffffffff";
+            };
+            border = { width = 0; radius = 0; };
           };
         };
 
@@ -169,8 +265,6 @@
           enable = true;
           settings = {
             font_size = "11.5";
-
-            # cyberdream theme
             background            = "#16181a";
             foreground            = "#ffffff";
             cursor                = "#ffffff";
@@ -210,41 +304,134 @@
           hyprcursor.enable = true;
         };
 
-        # Dark GTK apps (file dialogs, etc).
         gtk = {
           enable = true;
           theme = { name = "Adwaita-dark"; package = pkgs.gnome-themes-extra; };
           gtk3.extraConfig.gtk-application-prefer-dark-theme = 1;
           gtk4.extraConfig.gtk-application-prefer-dark-theme = 1;
-          # Adopt the new default: don't force a theme on GTK4/libadwaita apps
-          # (dark still applies via prefer-dark-theme above). Silences the
-          # stateVersion < 26.05 legacy-default warning.
           gtk4.theme = null;
         };
 
-        # Neovim: init.lua verbatim; plugins + LSP pinned by Nix.
-        programs.neovim = {
+        programs.nixvim = {
+          # One nixpkgs: reuse home-manager's pkgs instead of nixvim building its own.
+          nixpkgs.useGlobalPackages = true;
           enable = true;
           withPython3 = false;
           withRuby = false;
-          withNodeJs = false;
-          initLua = "vim.g.nix_managed = true\n"
-            + builtins.readFile ./config/nvim/init.lua;
-          plugins = with pkgs.vimPlugins; [
-            nvim-web-devicons cyberdream-nvim oil-nvim nvim-lspconfig
-            typst-preview-nvim blink-cmp Navigator-nvim
-            snacks-nvim todo-comments-nvim trouble-nvim
-            nvim-treesitter.withAllGrammars
-            fidget-nvim lualine-nvim
-          ];
-          extraPackages = with pkgs; [
-            lua-language-server rust-analyzer tinymist nixd zls
-            yaml-language-server vscode-langservers-extracted
-            typescript-language-server svelte-language-server
-          ];
+          globals.mapleader = " ";
+          opts = {
+            winborder = "rounded";
+            tabstop = 2;
+            shiftwidth = 2;
+            expandtab = true;
+            smartindent = true;
+            wrap = false;
+            number = true;
+            relativenumber = true;
+            ignorecase = true;
+            undofile = true;
+            signcolumn = "yes";
+            clipboard = "unnamedplus";
+          };
+          colorschemes.cyberdream.enable = true;
+          plugins = {
+            web-devicons.enable = true;
+            blink-cmp.enable = true;
+            todo-comments.enable = true;
+            trouble.enable = true;
+            fidget.enable = true;
+            typst-preview.enable = true;
+            treesitter = {
+              enable = true;
+              settings.highlight.enable = true;
+            };
+            lualine = {
+              enable = true;
+              settings.options = {
+                component_separators = { left = "|"; right = "|"; };
+                section_separators   = { left = "|"; right = "|"; };
+              };
+            };
+            oil = {
+              enable = true;
+              settings = {
+                default_file_explorer = true;
+                delete_to_trash = true;
+                skip_confirm_for_simple_edits = true;
+                view_options.show_hidden = true;
+                use_default_keymaps = false;
+                keymaps = {
+                  "g?"   = { __unkeyed-1 = "actions.show_help"; mode = "n"; };
+                  "<CR>" = "actions.select";
+                  "-"    = { __unkeyed-1 = "actions.parent"; mode = "n"; };
+                  "_"    = { __unkeyed-1 = "actions.open_cwd"; mode = "n"; };
+                  "`"    = { __unkeyed-1 = "actions.cd"; mode = "n"; };
+                };
+              };
+            };
+            snacks = {
+              enable = true;
+              settings.picker.ui_select = true;
+            };
+            lspconfig.enable = true;
+          };
+          lsp = {
+            servers = {
+              lua_ls.enable = true;
+              nixd.enable = true;
+              rust_analyzer.enable = true;
+              ts_ls.enable = true;
+              html.enable = true;
+              cssls.enable = true;
+              jsonls.enable = true;
+              tinymist.enable = true;
+              zls.enable = true;
+              yamlls.enable = true;
+              svelte.enable = true;
+            };
+            keymaps = [
+              { key = "gd"; lspBufAction = "definition"; }
+              { key = "gD"; lspBufAction = "declaration"; }
+              { key = "<leader>ca"; lspBufAction = "code_action"; }
+              { key = "<leader>cr"; lspBufAction = "rename"; }
+              { key = "gr"; action.__raw = "Snacks.picker.lsp_references"; }
+              { key = "gt"; action.__raw = "Snacks.picker.lsp_type_definitions"; }
+              { key = "<leader>ss"; action.__raw = "Snacks.picker.lsp_symbols"; }
+              { key = "<leader>sS"; action.__raw = "Snacks.picker.lsp_workspace_symbols"; }
+            ];
+          };
+          autoCmd = [{
+            event = "TextYankPost";
+            callback.__raw = "function() vim.highlight.on_yank() end";
+          }];
+          keymaps =
+            let
+              n = key: action: { mode = "n"; inherit key action; };
+              nr = key: lua: { mode = "n"; inherit key; action.__raw = lua; };
+            in [
+              (n "<leader>w" ":write<CR>")
+              (n "<leader>q" ":quit<CR>")
+              (n "<leader>e" ":Oil<CR>")
+              (n "<leader>x" ":Trouble diagnostics toggle filter.buf=0<CR>")
+              (n "<leader>X" ":Trouble diagnostics<CR>")
+              (n "<leader>|" ":vsplit<CR>")
+              (n "<leader>_" ":split<CR>")
+              (n "<ESC>" ":noh<CR>")
+              (n "<C-h>" "<C-w>h")
+              (n "<C-l>" "<C-w>l")
+              (n "<C-k>" "<C-w>k")
+              (n "<C-j>" "<C-w>j")
+              (nr "<leader>f"  "function() Snacks.picker.files() end")
+              (nr "<leader>sg" "function() Snacks.picker.grep() end")
+              (nr "<leader>g"  "function() Snacks.lazygit() end")
+              (nr "<leader>t"  "function() Snacks.picker.todo_comments() end")
+              (nr "<leader>lf" "vim.lsp.buf.format")
+              { mode = [ "n" "t" ]; key = "<C-t>"; action.__raw = ''function() Snacks.terminal.toggle("zsh") end''; }
+              { mode = "v"; key = ">"; action = ">gv"; options = { silent = true; desc = "Indent and reselect"; }; }
+              { mode = "v"; key = "<"; action = "<gv"; options = { silent = true; desc = "Unindent and reselect"; }; }
+            ];
         };
 
-        # Zen browser + Tridactyl, extensions pinned (works on aarch64 + x86).
         programs.zen-browser = {
           enable = true;
           setAsDefaultBrowser = true;
@@ -252,31 +439,14 @@
             settings = {
               "browser.newtabpage.enabled" = false;
               "privacy.donottrackheader.enabled" = true;
-              "signon.rememberSignons" = false;
-
-              # Dark mode
               "browser.theme.toolbar-theme" = 0;
               "browser.theme.content-theme" = 0;
               "layout.css.prefers-color-scheme.content-override" = 0;
               "ui.systemUsesDarkTheme" = 1;
             };
-            # Re-instantiate pkgs with the firefox-addons overlay + allowUnfree so
-            # the (unfree) 1Password addon evaluates under *our* config.
-            extensions.packages = let
-              addonsPkgs = import pkgs.path {
-                inherit (pkgs.stdenv.hostPlatform) system;
-                config.allowUnfree = true;
-                overlays = [ firefox-addons.overlays.default ];
-              };
-            in with addonsPkgs.firefox-addons; [
-              tridactyl
-              ublock-origin
-              onepassword-password-manager
-            ];
           };
         };
             
-        # zsh + starship, no framework.
         programs.zsh = {
           enable = true;
           autosuggestion.enable = true;
@@ -284,193 +454,71 @@
           shellAliases = { ll = "ls -alh"; gs = "git status"; };
         };
         programs.starship.enable = true;
-
-      
-
-        # SSH auth via the 1Password agent — private keys stay in the vault,
-        # never on disk or in the Nix store.
-        programs.ssh = {
-          enable = true;
-          enableDefaultConfig = false;
-          settings."*".IdentityAgent = "~/.1password/agent.sock";
-        };
-
-        # git identity + SSH commit signing through 1Password's op-ssh-sign.
         programs.git = {
           enable = true;
-          settings = {
-            user.name  = "Mads Fagerlund";
-            user.email = "mads@deepvis.ai";
-            user.signingkey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAPlpVGZLhfrJqh2j5q3reyGOPQQ9BgW8syQ28tYjlg2";
-            gpg.format = "ssh";
-            # NixOS store path — NOT 1Password's suggested /opt/1Password/... which doesn't exist here.
-            "gpg \"ssh\"".program =
-              "${pkgs._1password-gui}/share/1password/op-ssh-sign";
-            commit.gpgsign = true;
-            # Transparently use SSH (1Password agent) for the deepvis server,
-            # so existing HTTPS remotes need no manual `git remote set-url`.
-            url."git@git.deepvis.ai:".insteadOf = "https://git.deepvis.ai/";
-          };
+          settings.user = { name = "Mads Fagerlund"; email = "mads@deepvis.ai"; };
         };
 
-        home.packages = with pkgs; [ ripgrep fd tridactyl-native lazygit rustc cargo clippy rustfmt rust-analyzer claude-code gcc bluetui impala postgresql fastfetch remmina unzip (linearTui pkgs) ];
+        home.packages = with pkgs; [ 
+          ripgrep 
+          fd 
+          lazygit 
+          rustc 
+          cargo 
+          clippy 
+          rustfmt 
+          rust-analyzer 
+          claude-code 
+          gcc 
+          bluetui 
+          impala 
+          fastfetch 
+          remmina 
+          unzip
+        ];
       };
 
       # ───────────────────── shared system (both hosts) ─────────────────────
       common = { pkgs, ... }: {
         nix.settings.experimental-features = [ "nix-command" "flakes" ];
-        # Trusted so client-side nix config takes effect — substituters and
-        # remote builders are trusted settings, silently ignored for anyone
-        # else. A cache that appears to do nothing is the usual symptom.
         nix.settings.trusted-users = [ "mads" ];
-
-        # The deepvis binary cache: the embedded flakes in models/ort-nix
-        # (onnxruntime built from source, a CUDA training env) are hours of
-        # work to build and seconds to substitute.
         nix.settings.extra-substituters = [ "https://deepvis.cachix.org" ];
         nix.settings.extra-trusted-public-keys = [
           "deepvis.cachix.org-1:UE/H6ERLwqhSqubzh8+pzl9eTm0kpMExGe0ym6fENp8="
         ];
-        # Private cache, so reads need a token. nix refuses `netrc-file` on
-        # the command line under the daemon, and a token in the substituter
-        # URL would land in the process table — a root-owned 0600 netrc is
-        # the only form the calling process cannot read.
         nix.settings.netrc-file = "/etc/nix/netrc";
 
-        # x86_64 derivations build off this machine rather than under local
-        # qemu emulation, and aarch64 ones go out too when the local
-        # machine is busy.
-        #
-        # The host keys are pinned system-wide because the ssh'ing party is
-        # the root daemon, which has no known_hosts and never gets a tty to
-        # answer a trust prompt.
-        programs.ssh.knownHosts."builder" = {
-          extraHostNames = [ "5.9.71.104" "builder.tailf5eaab.ts.net" ];
-          publicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHnKIrxYtlovvYGgkpEZXY8wG/CuSLMGOM/84eIlyeVW";
-        };
-        programs.ssh.knownHosts."eu.nixbuild.net" = {
-          publicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPIQCZc54poJ8vqawd8TraNryQeJnvH1eLpIDgbiqymM";
-        };
-        nix.distributedBuilds = true;
-        nix.buildMachines = [
-          {
-            hostName = "builder";
-            sshUser = "builder";
-            # The daemon (root) does the ssh'ing, so it needs an explicit
-            # on-disk key — it has no access to a user's agent.
-            sshKey = "/home/mads/.ssh/id_ed25519";
-            protocol = "ssh-ng";
-            system = "x86_64-linux";
-            maxJobs = 16;
-            supportedFeatures = [ "big-parallel" "kvm" "nixos-test" ];
-          }
-          # nixbuild.net, for both architectures. Listed after `builder` so
-          # the machine we already pay for is preferred.
-          #
-          # Every feature it supports is advertised, not just the two in the
-          # quickstart: nix only sends a derivation to a builder claiming
-          # *every* feature that derivation requires, so omitting `kvm` or
-          # `nixos-test` would silently route those back to local builds.
-          {
-            hostName = "eu.nixbuild.net";
-            sshUser = "root";
-            sshKey = "/home/mads/.ssh/id_ed25519";
-            protocol = "ssh-ng";
-            system = "x86_64-linux";
-            maxJobs = 100;
-            supportedFeatures = [ "benchmark" "big-parallel" "ca-derivations" "kvm" "nixos-test" ];
-          }
-          {
-            hostName = "eu.nixbuild.net";
-            sshUser = "root";
-            sshKey = "/home/mads/.ssh/id_ed25519";
-            protocol = "ssh-ng";
-            system = "aarch64-linux";
-            maxJobs = 100;
-            supportedFeatures = [ "benchmark" "big-parallel" "ca-derivations" "kvm" "nixos-test" ];
-          }
-        ];
-
-        # iwd owns Wi-Fi (driven from impala, which is iwd-only); networkd does
-        # DHCP and resolved does DNS. No NetworkManager: running it on top of
-        # iwd meant two managers with separate saved networks, which ended in
-        # "Secrets were required, but not provided".
         networking.wireless.iwd.enable = true;
-        networking.useNetworkd = true; # DHCP on any ethernet/wifi by default
-        systemd.network.wait-online.anyInterface = true; # one link up is enough
-
-        # iwd only reads /var/lib/iwd. C = copy once, so a password added to
-        # the file later (or via impala) is never overwritten.
-        systemd.tmpfiles.rules = [
-          "C /var/lib/iwd/eduroam.8021x 0600 root root - ${pkgs.writeText "eduroam.8021x" ''
-            [Security]
-            EAP-Method=PEAP
-            EAP-Identity=447087@net.aau.dk
-            EAP-PEAP-Phase2-Method=MSCHAPV2
-            EAP-PEAP-Phase2-Identity=447087@net.aau.dk
-          ''}"
-        ];
-
-        # Secret Service (org.freedesktop.secrets) provider, D-Bus-activated on
-        # demand. Without it 1Password can't persist the 2FA device token
-        # ("unable to save your two-factor token") and re-prompts every unlock.
+        networking.useNetworkd = true;
+        systemd.network.wait-online.anyInterface = true;
         services.gnome.gnome-keyring.enable = true;
-
         programs._1password.enable = true;
         programs._1password-gui = {
           enable = true;
           polkitPolicyOwners = [ "mads" ];
         };
-        # Zen (a Firefox fork) runs as "zen-beta"; 1Password only trusts an
-        # allowlist of browser process names, so add it or the extension can't
-        # unlock via the desktop app. Manifest already lives in ~/.mozilla.
-        environment.etc."1password/custom_allowed_browsers".text = ''
-          zen-beta
-        '';
+
+        environment.etc."1password/custom_allowed_browsers".text = ''zen-beta'';
 
         services.tailscale.enable = true;
-        # Tailscale SSH: keyless, portless SSH gated by tailnet ACLs.
-        # Needs a matching "ssh" rule in the admin console to actually permit access.
         services.tailscale.extraUpFlags = [ "--ssh" ];
 
-        time.timeZone = "Europe/Copenhagen"; # set yours
+        time.timeZone = "Europe/Copenhagen";
         i18n.defaultLocale = "en_US.UTF-8";
 
         programs.hyprland = { enable = true; withUWSM = true; };
         programs.hyprlock.enable = true;
 
-        # Every GUI app lives in the one wayland-wm@hyprland.service cgroup, so
-        # with systemd's default OOMPolicy=stop a kernel OOM-kill of ANY process
-        # in it stops the whole unit -- compositor included. 1Password was always
-        # the victim (highest oom_score_adj), but losing it killed the entire
-        # desktop, and uwsm sets Restart=no, so nothing came back. It read as
-        # "Hyprland crashed" when the compositor was never at fault.
-        #
-        # continue: log the kill, lose that one app, keep the session. Merges
-        # into the drop-in the uwsm module already generates for this unit.
         systemd.user.services."wayland-wm@".serviceConfig.OOMPolicy = "continue";
-
-        # Autologin means no password reaches PAM at login, so the gnome-keyring
-        # login keyring is never created or unlocked -- which is why 1Password
-        # could not persist its 2FA device token and re-prompted the YubiKey
-        # every unlock. Putting pam_gnome_keyring in hyprlock's stack instead
-        # makes the lock screen we already have do that job, so there is still
-        # exactly one password prompt and no second login screen.
         security.pam.services.hyprlock.enableGnomeKeyring = true;
         services.hypridle.enable = true;
 
-        xdg.portal = {
-          enable = true;
-          extraPortals = [ pkgs.xdg-desktop-portal-hyprland ];
-        };
 
-
-        # greetd autologins mads straight into Hyprland (via uwsm).
         services.greetd = {
           enable = true;
           settings = {
-            initial_session = { user = "mads"; command = "uwsm start hyprland"; };
-            default_session = { user = "mads"; command = "uwsm start hyprland"; };
+            initial_session = { user = "mads"; command = "uwsm start -eD Hyprland hyprland.desktop"; };
+            default_session = { user = "mads"; command = "uwsm start -eD Hyprland hyprland.desktop"; };
           };
         };
 
@@ -478,15 +526,13 @@
 
         hardware.bluetooth.enable = true;
         programs.zsh.enable = true;
-        # No NixOS manual: it puts a "NixOS Manual" entry in the launcher and we
-        # read the docs on the web. man pages are unaffected.
         documentation.nixos.enable = false;
 
         fonts.packages = [ pkgs.nerd-fonts.jetbrains-mono ];
 
         environment.systemPackages = with pkgs; [
-          git kitty fuzzel
-          wl-clipboard grim slurp swaybg brightnessctl playerctl hyprshot
+          git
+          wl-clipboard swaybg brightnessctl playerctl hyprshot
           hyprpolkitagent xdg-utils
         ];
 
@@ -494,14 +540,15 @@
           isNormalUser = true;
           extraGroups = [ "wheel" "video" "docker" ];
           shell = pkgs.zsh;
-          initialPassword = "changeme"; # CHANGE after first boot (`passwd`)
+          initialPassword = "changeme";
         };
 
         system.stateVersion = "25.11";
+        nixpkgs.config.allowUnfree = true;
+        hardware.enableRedistributableFirmware = true;
 
         home-manager.useGlobalPkgs = true;
         home-manager.useUserPackages = true;
-        # Back up (don't clobber) any pre-existing files HM wants to manage.
         home-manager.backupFileExtension = "hm-bak";
         home-manager.users.mads = home;
       };
@@ -511,9 +558,6 @@
         modules = [ 
           home-manager.nixosModules.home-manager 
           common 
-          ({ pkgs, ... }: {
-            nixpkgs.config.allowUnfree = true;
-          })
         ] ++ modules;
       };
 
@@ -525,72 +569,58 @@
           system = "aarch64-linux";
           modules = [
             apple-silicon.nixosModules.apple-silicon-support
-            ./hosts/mbp/hardware-configuration.nix # generated on the Mac
-            ({ ... }: {
+            ({ pkgs, ... }: {
               networking.hostName = "mbp";
 
-              # Wi-Fi/BT firmware, vendored (a pure flake can't read /boot/asahi).
-              hardware.asahi.peripheralFirmwareDirectory = ./firmware;
+              boot.initrd.availableKernelModules = [ "usb_storage" "sdhci_pci" ];
+              fileSystems."/" = {
+                device = "/dev/disk/by-uuid/c828c1a0-ce7b-4e27-b8e4-bce032bb30bf";
+                fsType = "btrfs";
+                options = [ "subvol=@" "compress=zstd" "noatime" ];
+              };
+              fileSystems."/boot" = {
+                device = "/dev/disk/by-uuid/0BB8-A960";
+                fsType = "vfat";
+                options = [ "fmask=0022" "dmask=0022" ];
+              };
+
+              hardware.asahi.peripheralFirmwareDirectory =
+                pkgs.linkFarm "mbp-firmware" [ { name = "firmware.cpio"; path = ./mbp-firmware.cpio; } ];
               hardware.asahi.enable = true;
 
               boot.loader.systemd-boot.enable = true;
-              boot.loader.systemd-boot.configurationLimit = 3; # 500M ESP is small
+              boot.loader.systemd-boot.configurationLimit = 3;
               boot.extraModprobeConfig = "options hid_apple fnmode=1";
-              boot.blacklistedKernelModules = [ "pcspkr" ];
 
-              # Root is btrfs (p8). A scrub re-reads every block and verifies its
-              # checksum, which is the only way bit rot on this SSD surfaces before
-              # something tries to read the damaged file. Metadata is DUP, so a bad
-              # metadata block gets repaired from its copy automatically.
               services.btrfs.autoScrub = {
                 enable = true;
                 interval = "monthly";
                 fileSystems = [ "/" ];
               };
 
-              # 15G of RAM and no swap at all: a `nixos-rebuild` forks ~60 nix
-              # evaluators, and stacked on a browser and a few editor sessions
-              # that was enough to exhaust it. The kernel then OOM-killed a
-              # process inside wayland-wm@hyprland.service, and systemd's default
-              # OOMPolicy=stop tore the whole graphical session down with it.
-              #
-              # zram rather than a swapfile, because root is compress=zstd and a
-              # btrfs swapfile needs its own nodatacow, uncompressed subvolume.
               zramSwap = {
                 enable = true;
-                memoryPercent = 50; # 7.6G of backing store, ~a third of that in real RAM
+                memoryPercent = 50;
               };
 
-              # Swapping to RAM is cheap, so let the kernel compress anon pages
-              # rather than evict page cache. At the OOM above, cache had already
-              # been squeezed to 40M while 13G sat in anon and nothing was
-              # reclaimable — the default swappiness of 60 gets that backwards here.
               boot.kernel.sysctl = {
                 "vm.swappiness" = 180;
-                "vm.page-cluster" = 0; # zram has no seek penalty, so no readahead
+                "vm.page-cluster" = 0;
               };
 
-              # Build x86_64 derivations (packing-station iso/deploys) via qemu.
-              boot.binfmt.emulatedSystems = [ "x86_64-linux" ];
 
-              # Resolve .local names, so the packing stations can be reached and
-              # deployed to by hostname instead of by address.
               services.avahi = {
                 enable = true;
                 nssmdns4 = true;
               };
-              services.resolved.settings.Resolve.MulticastDNS = false; # avahi owns mDNS
+              services.resolved.settings.Resolve.MulticastDNS = false;
 
-              # Asahi kernel + Mesa cache, and the Raspberry Pi vendor
-              # kernel/firmware cache (else both compile from source).
               nix.settings = {
                 extra-substituters = [
                   "https://nixos-apple-silicon.cachix.org"
-                  "https://nixos-raspberrypi.cachix.org"
                 ];
                 extra-trusted-public-keys = [
                   "nixos-apple-silicon.cachix.org-1:8psDu5SA5dAD7qA0zMy5UT292TxeEPzIz8VVEr2Js20="
-                  "nixos-raspberrypi.cachix.org-1:4iMO9LXa8BqhU+Rpg6LQKiGa2lsNh/j2oiYLNOQ5sPI="
                 ];
               };
             })
@@ -601,73 +631,119 @@
         pc = mkHost {
           system = "x86_64-linux";
           modules = [
-            ./hosts/pc/hardware-configuration.nix # generated on the PC
-            ({ config, pkgs, ... }: {
+            ({ pkgs, ... }:
+            let
+              rgb = pkgs.writers.writePython3Bin "rgb" { flakeIgnore = [ "E401" "E501" ]; } ''
+                import fcntl, glob, os, select, sys, time
+                
+                FAN = (0x80, 0x60, 0x38)
+                BOARD = (0x80, 0x70, 0x60)
+                LEDS = 150
+                DEAD = {58, 69, 80, 97, 99, 110, 121, 124, 142}
+                
+                hid = {}
+                for uevent in glob.glob("/sys/class/hidraw/hidraw*/device/uevent"):
+                    for line in open(uevent):
+                        if line.startswith("HID_NAME="):
+                            hid[line[9:].strip()] = "/dev/" + uevent.split("/")[4]
+                
+                hub = os.open(next(p for n, p in hid.items() if "Lighting Node CORE" in n), os.O_RDWR)
+                colors = [(0, 0, 0) if i + 1 in DEAD else FAN for i in range(LEDS)]
+                packets = [[0x38, 0, 0x02]]
+                for off in range(0, LEDS, 50):
+                    chunk = colors[off:off + 50]
+                    for plane in range(3):
+                        packets.append([0x32, 0, off, len(chunk), plane, *[c[plane] for c in chunk]])
+                packets.append([0x33, 0xFF])
+                for p in packets:
+                    os.write(hub, bytes([0x00, *p]).ljust(65, b"\0"))
+                    if select.select([hub], [], [], 0.5)[0]:
+                        os.read(hub, 17)
+                
+                fd = os.open(next(p for n, p in hid.items() if "AURA LED Controller" in n), os.O_RDWR)
+                os.write(fd, bytes([0xEC, 0xB0]).ljust(65, b"\0"))
+                table = os.read(fd, 65) if select.select([fd], [], [], 1.0)[0] else b""
+                n = table[4 + 0x1B] if len(table) >= 0x20 and table[1] == 0x30 else 3
+                mask = (1 << n) - 1
+                for p in ([0x52, 0x53, 0x00, 0x01],
+                          [0x35, 0x00, 0x00, 0x00, 0x01],
+                          [0x36, mask >> 8, mask & 0xFF, 0x00, *(BOARD * n)],
+                          [0x3F, 0x55]):
+                    os.write(fd, bytes([0xEC, *p]).ljust(65, b"\0"))
+                os.close(fd)
+                
+                for path in glob.glob("/sys/class/i2c-dev/i2c-*"):
+                    if "NVIDIA" not in open(path + "/name").read():
+                        continue
+                    fd = os.open("/dev/" + os.path.basename(path), os.O_RDWR)
+                    fcntl.ioctl(fd, 0x0703, 0x63)
+                    try:
+                        for b in (0xAB, 0, 0, 0):
+                            os.write(fd, bytes([b]))
+                        ok = os.read(fd, 1)[0] == 0xAB and os.read(fd, 1)[0] in (0x10, 0x11, 0x12, 0x14)
+                    except OSError:
+                        ok = False
+                    if ok:
+                        for b in (0x40, *BOARD, 0x88, 0x01, 0x00, 0x63, 0xAA, 0, 0, 0):
+                            os.write(fd, bytes([b]))
+                    os.close(fd)
+                    if ok:
+                        break
+                else:
+                    print("gpu: not found on any NVIDIA i2c bus", file=sys.stderr)
+                
+                fd = os.open(next(p for n, p in hid.items() if "KrakenZ" in n), os.O_RDWR)
+                os.write(fd, bytes([0x30, 0x01]).ljust(64, b"\0"))
+                orientation = 0
+                for _ in range(12):
+                    reply = os.read(fd, 64) if select.select([fd], [], [], 1.0)[0] else b""
+                    if reply[:2] == b"\x31\x01":
+                        orientation = reply[0x1A]
+                        break
+                os.write(fd, bytes([0x30, 0x02, 0x01, 0, 0, 0, 1, orientation]).ljust(64, b"\0"))
+                os.close(fd)
+                
+                print("lighting set; committing the hub every 4 s", flush=True)
+                while True:
+                    time.sleep(4)
+                    os.write(hub, bytes([0x00, 0x33, 0xFF]).ljust(65, b"\0"))
+                    if select.select([hub], [], [], 0.5)[0]:
+                        os.read(hub, 17)
+              '';
+            in {
               networking.hostName = "pc";
 
-              # GigE camera link: static, never a route out. The segment also
-              # carries AAU's IPv6 RAs, and taking them made v6 traffic default
-              # out this port into a dead end.
-              networking.interfaces.enp7s0 = {
-                useDHCP = false;
-                ipv4.addresses = [ { address = "192.168.12.1"; prefixLength = 24; } ];
-              };
-              systemd.network.networks."40-enp7s0" = {
-                networkConfig.IPv6AcceptRA = false;
-                networkConfig.ConfigureWithoutCarrier = true; # camera may be off
-                linkConfig.RequiredForOnline = "no";
-              };
-              boot.loader.systemd-boot.enable = true;
-              boot.loader.efi.canTouchEfiVariables = true; # normal x86 UEFI
+              boot.initrd.availableKernelModules = [
+                "nvme" "xhci_pci" "ahci" "usbhid" "usb_storage" "sd_mod" "sr_mod" "vmd"
+              ];
+              fileSystems."/" = { device = "/dev/disk/by-label/NIXROOT"; fsType = "ext4"; };
+              fileSystems."/boot" = { device = "/dev/disk/by-label/NIXBOOT"; fsType = "vfat"; };
 
-              # Desktop: never suspend or hibernate, even if something asks.
+              boot.loader.systemd-boot.enable = true;
+              boot.loader.efi.canTouchEfiVariables = true;
+
               systemd.sleep.settings.Sleep = {
                 AllowSuspend = "no";
                 AllowHibernation = "no";
                 AllowHybridSleep = "no";
                 AllowSuspendThenHibernate = "no";
               };
-              # Ignore the keys that would normally trigger sleep.
-              services.logind.suspendKey = "ignore";
-              services.logind.hibernateKey = "ignore";
-              services.logind.lidSwitch = "ignore";
 
-              # NVIDIA (RTX 20-series or newer → open kernel module).
+
               services.xserver.videoDrivers = [ "nvidia" ];
-              hardware.graphics.enable = true; # OpenGL/Vulkan userspace (was hardware.opengl)
+              hardware.graphics.enable = true;
               hardware.nvidia = {
-                modesetting.enable = true;      # required for Wayland/Hyprland
-                open = true;                    # open kernel module (Turing+)
-                nvidiaSettings = true;
-                package = config.boot.kernelPackages.nvidiaPackages.stable;
+                modesetting.enable = true;
+                open = true;
+                nvidiaSettings = false;
               };
 
-              # Steam's client binary is 32-bit; this also turns on
-              # hardware.graphics.enable32Bit so it gets 32-bit NVIDIA GL.
-              programs.steam.enable = true;
-
-              # ── RGB ──
-              # What is in the case (surveyed via /sys/bus/usb, 2026-10-15):
-              #   1b1c:0c1a  Corsair Lighting Node CORE  6 fans (3 LL, 3 QL), USB HID
-              #   0b05:19af  ASUS AURA LED Controller    the board's own LEDs, USB HID
-              #              (the Lian Li case has no controller of its own; its
-              #              strips would be on this board's ARGB headers)
-              #   10de:2484  Gigabyte RTX 3070 Vision    i2c on the card's own bus
-              #   1e71:3008  NZXT Kraken Z53/Z63/Z73     the LCD, USB HID (the
-              #              kernel's nzxt_kraken3 does fans/pump)
-              #
-              # hosts/pc/rgb.py drives all four directly, with the byte
-              # layouts taken from OpenRGB and liquidctl; neither is installed.
-              # Colours and the list of dead fan LEDs live in the script. It
-              # stays resident because the Corsair hub blanks its per-LED mode
-              # without a commit every few seconds. Restart=always also covers
-              # the devices not being enumerated yet at boot.
-              boot.kernelModules = [ "i2c-dev" ]; # /dev/i2c-* for the GPU
+              boot.kernelModules = [ "i2c-dev" ];
               systemd.services.rgb = {
-                description = "Case lighting (hosts/pc/rgb.py)";
+                description = "Case lighting";
                 wantedBy = [ "multi-user.target" ];
                 serviceConfig = {
-                  ExecStart = "${pkgs.python3}/bin/python3 -u ${./hosts/pc/rgb.py} mask --keepalive";
+                  ExecStart = "${rgb}/bin/rgb";
                   Restart = "always";
                   RestartSec = 5;
                 };
@@ -676,12 +752,5 @@
           ];
         };
       };
-
-      # `nix develop` on either arch.
-      devShells = nixpkgs.lib.genAttrs [ "aarch64-linux" "x86_64-linux" ] (system: {
-        default = nixpkgs.legacyPackages.${system}.mkShell {
-          packages = [ nixpkgs.legacyPackages.${system}.nodejs ];
-        };
-      });
     };
 }
