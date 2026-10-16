@@ -75,7 +75,6 @@
 
             window_rule = [ { match.class = ".*"; suppress_event = "maximize"; } ];
 
-            # hyprshot ignores XDG_SCREENSHOTS_DIR; without this, shots land loose in ~/Pictures.
             env = [ { _args = [ "HYPRSHOT_DIR" (lib.generators.mkLuaInline ''os.getenv("HOME") .. "/Pictures/Screenshots"'') ]; } ];
           };
 
@@ -305,7 +304,6 @@
         };
 
         programs.nixvim = {
-          # One nixpkgs: reuse home-manager's pkgs instead of nixvim building its own.
           nixpkgs.useGlobalPackages = true;
           enable = true;
           withPython3 = false;
@@ -454,7 +452,8 @@
         home.packages = with pkgs; [ 
           ripgrep 
           fd 
-          lazygit 
+          lazygit
+          gh
           rustc 
           cargo 
           clippy 
@@ -502,19 +501,12 @@
 
         systemd.user.services."wayland-wm@".serviceConfig.OOMPolicy = "continue";
         services.hypridle.enable = true;
-        # Autologin sends no password through PAM, so the gnome-keyring login
-        # keyring would never unlock (1Password then re-asks the YubiKey every
-        # time). hyprlock is the first password prompt, so it does that job.
         security.pam.services.hyprlock.enableGnomeKeyring = true;
 
 
         services.greetd = {
           enable = true;
           settings = {
-            # Autologin straight into Hyprland, which starts hyprlock first (see the
-            # autostart hook), so boot still lands on a password prompt. uwsm runs
-            # hyprland.desktop, whose Exec is start-hyprland; -eD sets XDG_CURRENT_DESKTOP
-            # to exactly "Hyprland", as upstream's hyprland-uwsm.desktop does.
             default_session = { user = "mads"; command = "uwsm start -eD Hyprland hyprland.desktop"; };
           };
         };
