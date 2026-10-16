@@ -595,10 +595,7 @@
                 fileSystems = [ "/" ];
               };
 
-              zramSwap = {
-                enable = true;
-                memoryPercent = 50;
-              };
+              zramSwap.enable = true;
 
               boot.kernel.sysctl = {
                 "vm.swappiness" = 180;
@@ -721,7 +718,6 @@
 
 
               services.xserver.videoDrivers = [ "nvidia" ];
-              hardware.graphics.enable = true;
               hardware.nvidia = {
                 modesetting.enable = true;
                 open = true;
