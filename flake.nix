@@ -495,6 +495,9 @@
 
         environment.etc."1password/custom_allowed_browsers".text = ''zen-beta'';
 
+        # mDNS (.local names) via avahi; resolved's own responder is off so they do not clash.
+        services.avahi = { enable = true; nssmdns4 = true; };
+        services.resolved.settings.Resolve.MulticastDNS = false;
         services.tailscale.enable = true;
         services.tailscale.extraUpFlags = [ "--ssh" ];
 
@@ -603,11 +606,6 @@
               };
 
 
-              services.avahi = {
-                enable = true;
-                nssmdns4 = true;
-              };
-              services.resolved.settings.Resolve.MulticastDNS = false;
 
               nix.settings = {
                 extra-substituters = [
