@@ -28,9 +28,6 @@
         imports = [ zen-browser.homeModules.beta nixvim.homeModules.nixvim ];
         home.stateVersion = "25.11";
 
-        # Remmina writes this autostart entry when "start applet at login" is on.
-        # Autostarting it asks the keyring before hyprlock has unlocked it, which
-        # pops a "login did not unlock the keyring" prompt. Hidden masks it.
         xdg.configFile."autostart/remmina-applet.desktop".text = "[Desktop Entry]\nHidden=true";
 
         wayland.windowManager.hyprland = {
