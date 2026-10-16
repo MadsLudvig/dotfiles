@@ -444,6 +444,12 @@
           shellAliases = { ll = "ls -alh"; gs = "git status"; };
         };
         programs.starship.enable = true;
+        # Also puts `gh auth git-credential` in git's config, so HTTPS pushes use the
+        # gh login (hosts.yml, written by `gh auth login`, stays unmanaged).
+        programs.gh = {
+          enable = true;
+          settings = { git_protocol = "https"; aliases.co = "pr checkout"; };
+        };
         programs.git = {
           enable = true;
           settings.user = { name = "Mads Fagerlund"; email = "mads@deepvis.ai"; };
@@ -453,7 +459,6 @@
           ripgrep 
           fd 
           lazygit
-          gh
           rustc 
           cargo 
           clippy 
